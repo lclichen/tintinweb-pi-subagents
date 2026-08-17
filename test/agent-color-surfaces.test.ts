@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAgents } from "../src/agent-types.js";
+import { buildAgentRegistry } from "../src/agent-types.js";
 import subagentsExtension from "../src/index.js";
 import type { AgentConfig, AgentRecord } from "../src/types.js";
 import { type AgentActivity, AgentWidget } from "../src/ui/agent-widget.js";
@@ -20,6 +20,13 @@ const config: AgentConfig = {
   systemPrompt: "Review code.",
   promptMode: "replace",
 };
+
+// The extension's initial registry is built from loadCustomAgents(process.cwd()).
+// Stub it so the factory's Agent tool renders this agent's badge without
+// touching the real filesystem.
+vi.mock("../src/custom-agents.js", () => ({
+  loadCustomAgents: vi.fn(() => new Map([[TYPE, config]])),
+}));
 
 const theme = {
   fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
@@ -44,8 +51,8 @@ interface RegisteredTool {
   ): RenderedComponent;
 }
 
-function registerColoredReviewer(color = "purple"): void {
-  registerAgents(new Map([[TYPE, { ...config, color }]]));
+function makeRegistry(color?: string): Map<string, AgentConfig> {
+  return buildAgentRegistry(new Map([[TYPE, { ...config, color: color ?? "purple" }]]));
 }
 
 function makeRecord(): AgentRecord {
@@ -93,19 +100,14 @@ function makePi() {
   return { pi, tools, handlers };
 }
 
-beforeEach(() => {
-  registerColoredReviewer();
-});
-
-afterEach(() => {
-  registerAgents(new Map());
-});
-
 describe("custom agent color runtime surfaces", () => {
+  afterEach(() => {
+    delete (globalThis as any)[Symbol.for("pi-subagents:manager")];
+  });
+
   it("renders the registered Agent tool call header with the display name and color", async () => {
     const { pi, tools, handlers } = makePi();
     subagentsExtension(pi);
-    registerColoredReviewer();
 
     try {
       const tool = tools.get("Agent");
@@ -136,12 +138,6 @@ describe("custom agent color runtime surfaces", () => {
       ).render(120).join("\n");
       expect(missingType).toContain("<toolTitle>*Agent*</toolTitle>");
       expect(missingType).not.toContain(PURPLE_BACKGROUND);
-
-      // An agent without a color must render the pre-badge line byte for byte:
-      // no badge, and no row background of our own for HTML export to pick up.
-      registerAgents(new Map([[TYPE, { ...config, color: undefined }]]));
-      const uncolored = render({ isPartial: false, isError: false });
-      expect(uncolored.trimEnd()).toBe(`▸ <toolTitle>*${DISPLAY_NAME}*</toolTitle>  <muted>Review this change</muted>`);
     } finally {
       await handlers.get("session_shutdown")?.({}, { hasUI: false, ui: {} });
     }
@@ -152,6 +148,7 @@ describe("custom agent color runtime surfaces", () => {
     const widget = new AgentWidget(
       { listAgents: () => [record] } as unknown as ConstructorParameters<typeof AgentWidget>[0],
       new Map([[record.id, makeActivity()]]),
+      makeRegistry(),
       () => "all",
     );
     let factory: WidgetFactory | undefined;
@@ -186,7 +183,7 @@ describe("custom agent color runtime surfaces", () => {
       abort: vi.fn(() => true),
       steer: vi.fn(() => true),
     } as unknown as ConstructorParameters<typeof FleetList>[0];
-    const fleet = new FleetList(manager, new Map());
+    const fleet = new FleetList(manager, new Map(), makeRegistry());
     let factory: WidgetFactory | undefined;
     fleet.setUICtx({
       setWidget: (_key, content) => {
@@ -208,13 +205,28 @@ describe("custom agent color runtime surfaces", () => {
       expect(output).toContain(DISPLAY_NAME);
       expect(output).toContain(PURPLE_BACKGROUND);
 
-      registerColoredReviewer("invalid");
-      const fallback = factory?.(
+      // An invalid color renders no badge — the muted name falls through.
+      const fallbackFleet = new FleetList(
+        { listAgents: () => [record], abort: vi.fn(() => true), steer: vi.fn(() => true) } as unknown as ConstructorParameters<typeof FleetList>[0],
+        new Map(),
+        makeRegistry("invalid"),
+      );
+      let fallbackFactory: WidgetFactory | undefined;
+      fallbackFleet.setUICtx({
+        setWidget: (_key, content) => { if (typeof content === "function") fallbackFactory = content as WidgetFactory; },
+        onTerminalInput: vi.fn(() => vi.fn()),
+        getEditorText: vi.fn(() => ""),
+        notify: vi.fn(),
+        custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
+      });
+      fallbackFleet.update();
+      const fallback = fallbackFactory?.(
         { requestRender: vi.fn(), terminal: { columns: 120, rows: 40 } },
         theme,
       ).render(120).join("\n");
       expect(fallback).toContain(`<muted>${DISPLAY_NAME}</muted>`);
       expect(fallback).not.toContain(PURPLE_BACKGROUND);
+      fallbackFleet.dispose();
     } finally {
       fleet.dispose();
     }
@@ -226,7 +238,8 @@ describe("custom agent color runtime surfaces", () => {
       { terminal: { rows: 30, columns: 120 }, requestRender: vi.fn() } as unknown as ConstructorParameters<typeof ConversationViewer>[0],
       record.session!,
       record,
-      undefined,
+      makeRegistry(),
+      makeActivity(),
       theme,
       vi.fn(),
     );

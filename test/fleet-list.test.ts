@@ -1,10 +1,13 @@
 import { Editor, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
-import { registerAgents } from "../src/agent-types.js";
+import { buildAgentRegistry } from "../src/agent-types.js";
 import type { AgentConfig, AgentRecord } from "../src/types.js";
 import { getDisplayName } from "../src/ui/agent-widget.js";
 import { FleetList, type FleetUICtx, formatFleetElapsed, formatFleetTokens } from "../src/ui/fleet-list.js";
+
+/** Default-agents registry — display names resolve from it (#206). */
+const registry = buildAgentRegistry(new Map());
 
 // ---- Key sequences (see node_modules/@earendil-works/pi-tui/dist/keys.js) ----
 const DOWN = "\x1b[B";
@@ -88,7 +91,7 @@ interface Harness {
   widgetTui: { requestRender(): void; focusedComponent?: unknown };
 }
 
-function harness(agents: AgentRecord[]): Harness {
+function harness(agents: AgentRecord[], fleetRegistry: Map<string, AgentConfig> = registry): Harness {
   let inputHandler: ((data: string) => { consume?: boolean } | undefined) | undefined;
   let widgetFactory: ((tui: any, theme: any) => { render(w: number): string[] }) | undefined;
   let editorText = "";
@@ -116,7 +119,7 @@ function harness(agents: AgentRecord[]): Harness {
   };
 
   const manager = fakeManager(agents);
-  const fleet = new FleetList(manager, new Map());
+  const fleet = new FleetList(manager, new Map(), fleetRegistry);
   fleet.setUICtx(ui);
   fleet.update();
 
@@ -217,7 +220,7 @@ describe("FleetList navigation", () => {
     expect(selected).toContain("<text>one</text>");
     expect(selected).toMatch(/<text>\d+s · ↓ [\d.]+k? tokens<\/text>/);
     // Agent display name rendered with the text token too (this type has no badge).
-    expect(selected).toContain(`<text>${getDisplayName("general-purpose")}</text>`);
+    expect(selected).toContain(`<text>${getDisplayName(registry, "general-purpose")}</text>`);
     // Inactive rows keep the muted/dim treatment.
     const unselected = h.render().find(l => l.includes("two"))!;
     expect(unselected).toContain("<dim>○</dim>");
@@ -226,28 +229,24 @@ describe("FleetList navigation", () => {
   });
 
   it("keeps a color badge on the selected row, bolded, without shifting it (#230)", () => {
-    registerAgents(new Map([[BADGED_TYPE, BADGED_CONFIG]]));
-    try {
-      const h = harness([
-        makeRecord({ id: "a1", type: BADGED_TYPE, description: "one" }),
-        makeRecord({ id: "a2", type: BADGED_TYPE, description: "two" }),
-      ]);
-      h.press(DOWN); // activate → main
-      const before = h.render().find(l => l.includes("one"))!;
-      expect(before).toContain(`${PURPLE_BACKGROUND}`);
-      expect(before).toContain(` ${BADGED_CONFIG.displayName} `);
+    const badgedRegistry = buildAgentRegistry(new Map([[BADGED_TYPE, BADGED_CONFIG]]));
+    const h = harness([
+      makeRecord({ id: "a1", type: BADGED_TYPE, description: "one" }),
+      makeRecord({ id: "a2", type: BADGED_TYPE, description: "two" }),
+    ], badgedRegistry);
+    h.press(DOWN); // activate → main
+    const before = h.render().find(l => l.includes("one"))!;
+    expect(before).toContain(`${PURPLE_BACKGROUND}`);
+    expect(before).toContain(` ${BADGED_CONFIG.displayName} `);
 
-      h.press(DOWN); // → a1
-      const selected = h.render().find(l => l.includes("one"))!;
-      // Selection bolds the badge rather than repainting it (Claude Code's FleetView) …
-      expect(selected).toContain(PURPLE_BACKGROUND);
-      expect(selected).toContain(`* ${BADGED_CONFIG.displayName} *`);
-      expect(selected).not.toContain(`<text>${BADGED_CONFIG.displayName}`);
-      // … so the description stays in the same column as when unselected.
-      expect(plain(selected).indexOf("one")).toBe(plain(before).indexOf("one"));
-    } finally {
-      registerAgents(new Map());
-    }
+    h.press(DOWN); // → a1
+    const selected = h.render().find(l => l.includes("one"))!;
+    // Selection bolds the badge rather than repainting it (Claude Code's FleetView) …
+    expect(selected).toContain(PURPLE_BACKGROUND);
+    expect(selected).toContain(`* ${BADGED_CONFIG.displayName} *`);
+    expect(selected).not.toContain(`<text>${BADGED_CONFIG.displayName}`);
+    // … so the description stays in the same column as when unselected.
+    expect(plain(selected).indexOf("one")).toBe(plain(before).indexOf("one"));
   });
 
   it("moves selection down/up and clamps at the ends", () => {
@@ -300,7 +299,7 @@ describe("FleetList navigation", () => {
       const agents = [makeRecord({ id: "a1" })];
       const listAgents = vi.fn(() => agents);
       const manager = { listAgents, abort: () => true } as unknown as AgentManager;
-      const fleet = new FleetList(manager, new Map());
+      const fleet = new FleetList(manager, new Map(), registry);
       fleet.setUICtx({
         setWidget: () => {}, onTerminalInput: () => () => {}, getEditorText: () => "",
         notify: () => {}, custom: (() => new Promise<undefined>(() => {})) as FleetUICtx["custom"],
@@ -379,7 +378,7 @@ describe("FleetList rendering", () => {
     expect(lines.find(l => l.includes("main"))).toContain("●"); // main selected by default
     const agentLine = lines.find(l => l.includes("Sleep then report 1"))!;
     expect(agentLine).toContain("○");
-    expect(agentLine).toContain(getDisplayName("general-purpose"));
+    expect(agentLine).toContain(getDisplayName(registry, "general-purpose"));
     expect(agentLine).toContain("↓ 13.1k tokens");
     expect(agentLine).toMatch(/\d+s · ↓/); // "<seconds>s · ↓ ..." (timing-agnostic)
   });

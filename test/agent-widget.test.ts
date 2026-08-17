@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildAgentRegistry } from "../src/agent-types.js";
 import { renderRunningAgentStatus } from "../src/index.js";
 import type { WidgetMode } from "../src/types.js";
 import { type AgentActivity, AgentWidget, fgPreservingNestedStyles, formatSessionTokens } from "../src/ui/agent-widget.js";
@@ -87,6 +88,7 @@ describe("AgentWidget", () => {
     const widget = new AgentWidget(
       manager as any,
       new Map([[activityId, makeActivity()]]),
+      buildAgentRegistry(new Map()),
       mode,
     );
     let factory: any;
@@ -184,7 +186,7 @@ describe("AgentWidget overflow accounting", () => {
       turnCount: 1,
       lifetimeUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     } as AgentActivity]));
-    const widget = new AgentWidget({ listAgents: () => agents } as any, activity, () => "all");
+    const widget = new AgentWidget({ listAgents: () => agents } as any, activity, buildAgentRegistry(new Map()), () => "all");
     let factory: any;
     widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
     widget.update();
@@ -271,7 +273,7 @@ describe("AgentWidget overflow accounting", () => {
       turnCount: 1,
       lifetimeUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     } as AgentActivity]]);
-    const widget = new AgentWidget({ listAgents: () => [agent] } as any, activity, () => "all");
+    const widget = new AgentWidget({ listAgents: () => [agent] } as any, activity, buildAgentRegistry(new Map()), () => "all");
     let factory: any;
     widget.setUICtx({ setStatus: () => {}, setWidget: (_k: any, c: any) => { factory = c; } } as any);
     const render = () => {

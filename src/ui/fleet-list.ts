@@ -14,7 +14,7 @@
 import { Editor, isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { hasAgentBadge, renderAgentName } from "../agent-color.js";
 import type { AgentManager } from "../agent-manager.js";
-import type { AgentRecord } from "../types.js";
+import type { AgentConfig, AgentRecord } from "../types.js";
 import { getLifetimeTotal } from "../usage.js";
 import { type AgentActivity, type Theme } from "./agent-widget.js";
 import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
@@ -94,6 +94,8 @@ export class FleetList {
   constructor(
     private manager: AgentManager,
     private agentActivity: Map<string, AgentActivity>,
+    /** The owning session's live agent registry — display names resolve here. */
+    private registry: Map<string, AgentConfig>,
   ) {}
 
   // ---- Lifecycle ----
@@ -303,6 +305,7 @@ export class FleetList {
           tui,
           session,
           record,
+          this.registry,
           activity,
           theme,
           done,
@@ -375,10 +378,12 @@ export class FleetList {
     // The selected row renders in the theme's primary text color so it reads as
     // one selection (#230). A configured badge survives — Claude Code's FleetView
     // keeps the agent color on the selected row too and only bolds it — which also
-    // keeps the row's width fixed as the selection moves.
+    // keeps the row's width fixed as the selection moves. The display name is
+    // resolved through the session's registry so custom agents show their
+    // configured name (#206).
     const selected = rosterIndex === sel;
-    const name = renderAgentName(record.type, theme, selected
-      ? { fallbackColor: "text", bold: hasAgentBadge(record.type) }
+    const name = renderAgentName(this.registry, record.type, theme, selected
+      ? { fallbackColor: "text", bold: hasAgentBadge(this.registry, record.type) }
       : { fallbackColor: "muted" });
     const description = selected ? theme.fg("text", record.description) : record.description;
     const left = `  ${this.bullet(rosterIndex, sel, theme)} ${name}  ${description}`;
