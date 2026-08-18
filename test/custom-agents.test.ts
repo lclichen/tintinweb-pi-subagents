@@ -848,6 +848,39 @@ Bad isolation.`);
     expect(result.get("bad-isolation")!.isolation).toBeUndefined();
   });
 
+  // `isolation: off` is a veto, not a synonym for omitting the field: agent
+  // config outranks tool-call params, so it turns a caller's "worktree" back
+  // off. That is why it must survive parsing as "off" rather than undefined.
+  it("parses isolation: off", () => {
+    writeAgent("no-wt", `---
+description: Never worktree
+isolation: off
+---
+
+No worktree.`);
+
+    const result = loadCustomAgents(tmpDir);
+    expect(result.get("no-wt")!.isolation).toBe("off");
+  });
+
+  // pi's frontmatter parser is not YAML 1.1, so bare `off`/`no` stay strings
+  // and only `false` becomes a boolean — accept the spellings an author is
+  // likely to reach for rather than silently dropping them.
+  it.each([
+    ["false", "isolation: false"],
+    ["none", "isolation: none"],
+    ["no", "isolation: no"],
+  ])("accepts %s as a spelling of off", (name, line) => {
+    writeAgent(`off-${name}`, `---
+${line}
+---
+
+Off.`);
+
+    const result = loadCustomAgents(tmpDir);
+    expect(result.get(`off-${name}`)!.isolation).toBe("off");
+  });
+
   // A YAML error in one file used to escape loadFromDir and abort the whole
   // extension load — pi exited 1 before the TUI. Regression for #212.
   it("skips a file with malformed frontmatter and still loads the others", () => {

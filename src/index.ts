@@ -25,7 +25,7 @@ import { inChildSessionContext } from "./child-context.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
 import { GroupJoinManager } from "./group-join.js";
-import { resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-config.js";
+import { isolationParam, resolveAgentInvocationConfig, resolveJoinMode } from "./invocation-config.js";
 import { describeMention, handleBase, isReservedHandle, parseMention, resolveHandleToType, stripAgentPrefix } from "./mention.js";
 import { runMentionClone } from "./mention-clone.js";
 import { type ModelRegistry, resolveModel } from "./model-resolver.js";
@@ -59,6 +59,7 @@ import { FleetList, type FleetUICtx } from "./ui/fleet-list.js";
 import { showSchedulesMenu } from "./ui/schedule-menu.js";
 import { selectItem } from "./ui/select-item.js";
 import { addUsage, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage } from "./usage.js";
+import { isWorktreeIsolationEnabled, setWorktreeIsolationEnabled } from "./worktree.js";
 
 // ---- Shared helpers ----
 
@@ -1257,6 +1258,7 @@ export default function (pi: ExtensionAPI) {
     setRememberAgents,
     setWidgetMode: setWidgetMode,
     setOutputTranscript: setOutputTranscriptDefault,
+    setWorktreeIsolation: setWorktreeIsolationEnabled,
     setMaxSubagentDepth: setMaxSubagentDepth,
     setFallbackSubagent: (v) => agentTypes.setFallbackSubagent(v),
   };
@@ -1291,6 +1293,23 @@ export default function (pi: ExtensionAPI) {
     ? `\n- Use \`schedule\` only when the user explicitly asked for scheduled / recurring / delayed execution (e.g. "every Monday", "in an hour"). Don't auto-schedule from vague intent like "monitor X" — run once now or ask.`
     : "";
 
+  // Same trade as scheduleParam/scheduleGuideline above: `isolationParam` drops
+  // the field from the schema when the project set `worktreeIsolation: false`,
+  // so the prose has to go with it. Left in, it would teach the model to pass a
+  // parameter that isn't declared — accepted (TypeBox sets no
+  // `additionalProperties: false`) and then silently dropped by the resolver.
+  // With no per-result note by design, the model would have every reason to go
+  // on reporting a `pi-agent-*` branch that was never created.
+  // Functions (not consts) so the #206 session-cwd adoption re-render reflects
+  // the session's own settings, same trade as scheduleGuideline.
+  const isolationGuideline = () => isWorktreeIsolationEnabled()
+    ? `\n- Use isolation: "worktree" to give the agent its own git worktree (safe parallel file modifications); leave it unset, or pass "off", for none. The worktree is removed when the agent finishes; if it made changes, they are committed to a branch and the branch is named in the result.`
+    : "";
+
+  const isolationCompactGuideline = () => isWorktreeIsolationEnabled()
+    ? `\n- isolation: "worktree" gives the agent its own git worktree (removed on completion); changes land on a branch named in the result.`
+    : "";
+
   // Compact Agent tool description (#91, `toolDescriptionMode: "compact"`) —
   // the same load-bearing facts as the full version at ~75% fewer tokens, for
   // small/local models. Per-option details live in the param descriptions.
@@ -1303,8 +1322,7 @@ Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
 - Parallel work: one message, multiple Agent calls, run_in_background: true on each. You are notified when background agents finish — never poll or sleep.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
-- resume continues a previous agent by ID; steer_subagent messages a running one.
-- isolation: "worktree" runs the agent in an isolated git worktree; changes land on a branch.`;
+- resume continues a previous agent by ID; steer_subagent messages a running one.${isolationCompactGuideline()}`;
 
   const fullAgentToolDescription = () => `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
 
@@ -1333,8 +1351,7 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
 - Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
 - Use thinking to control extended thinking level.
-- Use inherit_context if the agent needs the parent conversation history.
-- Use isolation: "worktree" to run the agent in an isolated git worktree (safe parallel file modifications). The worktree is automatically cleaned up if the agent makes no changes; otherwise the path and branch are returned in the result.${scheduleGuideline()}
+- Use inherit_context if the agent needs the parent conversation history.${isolationGuideline()}${scheduleGuideline()}
 
 ## Writing the prompt
 
@@ -1361,6 +1378,7 @@ Terse command-style prompts produce shallow, generic work.
       typeList: buildTypeListText,
       compactTypeList: buildCompactTypeListText,
       agentDir: getAgentDir,
+      isolationGuideline,
       scheduleGuideline,
     };
     // Replacement callback (not a string) — agent descriptions may contain `$&` etc.
@@ -1478,11 +1496,7 @@ Terse command-style prompts produce shallow, generic work.
             description: "If true, fork parent conversation into the agent. Default: false (fresh context).",
           }),
         ),
-        isolation: Type.Optional(
-          Type.Literal("worktree", {
-            description: 'Set to "worktree" to run the agent in a temporary git worktree (isolated copy of the repo). Changes are saved to a branch on completion.',
-          }),
-        ),
+        ...isolationParam(isWorktreeIsolationEnabled()),
         ...scheduleParam(),
       }),
 
@@ -1637,7 +1651,9 @@ Terse command-style prompts produce shallow, generic work.
         // Get agent config (if any)
         const customConfig = agentTypes.getAgentConfig(subagentType);
 
-        const resolvedConfig = resolveAgentInvocationConfig(customConfig, params);
+        const resolvedConfig = resolveAgentInvocationConfig(customConfig, params, {
+          worktreeAllowed: isWorktreeIsolationEnabled(),
+        });
 
         // Resolve model from agent config first; tool-call params only fill gaps.
         let model = ctx.model;
@@ -2581,8 +2597,15 @@ inherit_context: <true to fork parent conversation into agent so it sees chat hi
 run_in_background: <true to run in background by default. Default: false>
 output_transcript: <false to write no transcript file or path for this agent. Independent of persist_session. Default: true>
 isolated: <true for no extension/MCP tools, only built-in tools. Default: false>
-memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit for none>
-isolation: <"worktree" to run in isolated git worktree. Omit for normal>
+memory: <"user" (global), "project" (per-project), or "local" (gitignored per-project) for persistent memory. Omit for none>${
+      // Offering the field on a project that turned worktrees off would bake a
+      // request that is refused at spawn time into a file that outlives the
+      // session — the #231 pathology (models fill the fields they are shown)
+      // one layer up. Built per invocation, so this read is live.
+      isWorktreeIsolationEnabled()
+        ? `\nisolation: <"worktree" to run in isolated git worktree; "off" to refuse one even when the caller asks. Omit for normal>`
+        : ""
+    }
 ---
 
 <system prompt body — instructions for the agent>
@@ -2723,6 +2746,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
       rememberAgents: getRememberAgents(),
       widgetMode: getWidgetMode(),
       outputTranscript: getOutputTranscriptDefault(),
+      worktreeIsolation: isWorktreeIsolationEnabled(),
       maxSubagentDepth: getMaxSubagentDepth(),
       // Deliberately NOT `?? "general-purpose"`: every settings change writes the
       // whole snapshot, and materializing the implicit default would turn it into
@@ -2838,6 +2862,14 @@ Write the file using the write tool. Only write the file, nothing else.`;
           values: ["on", "off"],
         },
         {
+          id: "worktreeIsolation",
+          label: "Worktree isolation",
+          description:
+            "Allow isolation: worktree to copy the repo. Off refuses worktrees on every path immediately — for repos where a copy costs too much time or disk — and drops the `isolation` param from the Agent tool spec on next pi session.",
+          currentValue: isWorktreeIsolationEnabled() ? "on" : "off",
+          values: ["on", "off"],
+        },
+        {
           id: "fleetView",
           label: "Fleet view",
           description: "Claude Code-style main+subagents list below the editor (↓/← to navigate, Enter to view)",
@@ -2947,6 +2979,15 @@ Write the file using the write tool. Only write the file, nothing else.`;
         const enabled = value === "on";
         setOutputTranscriptDefault(enabled);
         notifyApplied(ctx, `Output transcript ${enabled ? "enabled" : "disabled"} by default`);
+      } else if (id === "worktreeIsolation") {
+        const enabled = value === "on";
+        setWorktreeIsolationEnabled(enabled);
+        // The refusal is live, but the tool schema is built at registration, so
+        // the isolation parameter only appears/disappears next session.
+        notifyApplied(
+          ctx,
+          `Worktree isolation ${enabled ? "enabled" : "disabled"}. Tool parameter updates on next pi session.`,
+        );
       } else if (id === "toolDescriptionMode") {
         setToolDescriptionMode(value as ToolDescriptionMode);
         notifyApplied(ctx, `Tool description set to ${value}. Takes effect on next pi session.`);

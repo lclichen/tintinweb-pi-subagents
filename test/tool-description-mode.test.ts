@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import subagentsExtension from "../src/index.js";
+import { setWorktreeIsolationEnabled } from "../src/worktree.js";
 
 const EXAMPLE_TEMPLATE = fileURLToPath(new URL("../examples/agent-tool-description.md", import.meta.url));
 
@@ -74,6 +75,11 @@ describe("toolDescriptionMode", () => {
   afterEach(async () => {
     await shutdown?.();
     shutdown = undefined;
+    // applySettings only applies keys that are PRESENT, so a subagents.json
+    // without `worktreeIsolation` leaves the module singleton wherever the
+    // previous test left it. Reset it so each setup()'s settings decide, and
+    // so the "default" assertions below really test the default.
+    setWorktreeIsolationEnabled(true);
     process.chdir(prevCwd);
     if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
@@ -172,11 +178,28 @@ describe("toolDescriptionMode", () => {
     expect(desc).not.toContain("schedule");
   });
 
+  it("{{isolationGuideline}} expands to the isolation bullet when worktrees are on (default)", () => {
+    const tools = setup({ toolDescriptionMode: "custom" }, () => {
+      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), "RULES:{{isolationGuideline}}\nEND");
+    });
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain('RULES:\n- Use isolation: "worktree"');
+  });
+
+  it("{{isolationGuideline}} expands to the empty string when worktree isolation is disabled", () => {
+    const tools = setup({ toolDescriptionMode: "custom", worktreeIsolation: false }, () => {
+      writeFileSync(join(tmpDir, ".pi", "agent-tool-description.md"), "RULES:{{isolationGuideline}}\nEND");
+    });
+    const desc: string = tools.get("Agent").description;
+    expect(desc).toContain("RULES:\nEND");
+    expect(desc).not.toContain("isolation");
+  });
+
   it("every documented placeholder is replaced — no {{ }} residue", () => {
     const tools = setup({ toolDescriptionMode: "custom" }, () => {
       writeFileSync(
         join(tmpDir, ".pi", "agent-tool-description.md"),
-        "A {{typeList}} B {{compactTypeList}} C {{agentDir}} D {{scheduleGuideline}} E",
+        "A {{typeList}} B {{compactTypeList}} C {{agentDir}} D {{scheduleGuideline}} E {{isolationGuideline}} F",
       );
     });
     const desc: string = tools.get("Agent").description;
@@ -235,6 +258,45 @@ describe("toolDescriptionMode", () => {
       // The rest of the parameter surface is untouched — this gates one field,
       // not the tool.
       expect(names).toEqual(expect.arrayContaining(["prompt", "description", "subagent_type"]));
+    });
+  });
+
+  // The schema half of `worktreeIsolation: false` shipped without the prose
+  // half: `isolationParam` dropped the field while both descriptions kept
+  // telling the model to pass it. Nothing rejects the undeclared key (TypeBox
+  // sets no additionalProperties: false) and, by design, nothing notes the
+  // downgrade on the result — so the model had every reason to report a
+  // `pi-agent-*` branch that was never created. Schema and prose have to move
+  // together, which is why both are asserted here.
+  describe("worktreeIsolation gates the isolation parameter and its prose", () => {
+    const props = (tools: Map<string, any>) =>
+      Object.keys(tools.get("Agent").parameters?.properties ?? {});
+
+    it("advertises `isolation` in schema and prose by default", () => {
+      const tools = setup();
+      expect(props(tools)).toContain("isolation");
+      expect(tools.get("Agent").description).toContain('Use isolation: "worktree"');
+    });
+
+    it("drops both when worktree isolation is disabled", () => {
+      const tools = setup({ worktreeIsolation: false });
+      const names = props(tools);
+      expect(names).not.toContain("isolation");
+      expect(tools.get("Agent").description).not.toContain("isolation");
+      // One field, not the tool — and the neighbouring gate is unaffected.
+      expect(names).toEqual(expect.arrayContaining(["prompt", "description", "subagent_type", "schedule"]));
+    });
+
+    it("drops the compact description's bullet too", () => {
+      const enabled = setup({ toolDescriptionMode: "compact" });
+      expect(enabled.get("Agent").description).toContain('isolation: "worktree"');
+    });
+
+    it("compact mode says nothing about isolation when disabled", () => {
+      const tools = setup({ toolDescriptionMode: "compact", worktreeIsolation: false });
+      expect(tools.get("Agent").description).not.toContain("isolation");
+      // The bullet above it survives — the gate trims a suffix, not the list.
+      expect(tools.get("Agent").description).toContain("resume continues a previous agent by ID");
     });
   });
 

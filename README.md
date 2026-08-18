@@ -294,7 +294,7 @@ All fields are optional — sensible defaults for everything.
 | `skills` | `true` | `true` inherits the parent's skills; `false` inherits none. A comma-separated list preloads **only** those skills into the system prompt and does not inherit the rest (see [Skill Preloading](#skill-preloading) for discovery locations) |
 | `memory` | — | Persistent agent memory scope: `project`, `local`, or `user`. Auto-detects read-only agents |
 | `disallowed_tools` | — | Comma-separated tools to deny even if extensions provide them |
-| `isolation` | — | Set to `worktree` to run in an isolated git worktree |
+| `isolation` | — | Set to `worktree` to run in an isolated git worktree, or `off` to refuse one even when the caller passes `isolation: "worktree"` (frontmatter is authoritative). `none`, `no`, and `false` are accepted spellings of `off` |
 | `model` | inherit parent | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp are interchangeable) and falls back to the same model under another provider if the named one doesn't have it |
 | `thinking` | inherit | off, minimal, low, medium, high, xhigh, max — actual availability depends on your pi version and model; pi clamps unsupported levels down |
 | `max_turns` | unlimited | Max agentic turns before graceful shutdown. `0` or omit for unlimited |
@@ -400,7 +400,7 @@ Launch a sub-agent.
 | `run_in_background` | boolean | no | Run without blocking |
 | `resume` | string | no | Agent ID to resume a previous session |
 | `isolated` | boolean | no | No extension/MCP tools |
-| `isolation` | `"worktree"` | no | Run in an isolated git worktree |
+| `isolation` | `"off"` \| `"worktree"` | no | `worktree` runs in an isolated git worktree; `off` (the default) does not. Absent from the schema entirely when `worktreeIsolation: false` |
 | `inherit_context` | boolean | no | Fork parent conversation into agent |
 
 ### `get_subagent_result`
@@ -531,6 +531,8 @@ Runtime tuning values set via `/agents` → Settings (max concurrency, default m
 
 **Output transcript** (`outputTranscript`, default `true`): the project/global default for writing each subagent's `.output` transcript. Toggle via `/agents → Settings → Output transcript`, or set `false` in `subagents.json` to make transcripts opt-in project-wide — useful when run transcripts shouldn't sit on disk for backup or DLP tooling to pick up. A custom agent's `output_transcript` frontmatter overrides this per agent. Applied live at spawn time. Governs only the transcript, not `persist_session`, worktree commits, or memory files.
 
+**Worktree isolation** (`worktreeIsolation`, default `true`): whether `isolation: "worktree"` may create a worktree at all. Toggle via `/agents → Settings → Worktree isolation`, or set `false` in `subagents.json` on a repo where a copy costs too much time or disk. Off, the `Agent` tool's `isolation` parameter is dropped from the schema entirely and the bullet describing it leaves the tool description with it — nothing to pass, and no context spent describing it — and worktrees are refused on every other path too (agent files, scheduled jobs, cross-extension RPC). The `/agents` agent-file generator stops offering the `isolation:` frontmatter field too, so a generated agent can't bake in a request that would be refused. A requested worktree is downgraded to a normal run rather than failing the call, since declining one is the point; there is deliberately no note on the result, which is exactly why the prose has to go when the parameter does. The refusal applies immediately; the parameter and its prose appear or disappear on the next pi session. See [Turning worktrees off](#turning-worktrees-off).
+
 **Tool description** (`toolDescriptionMode`, default `"full"`): which Agent tool description the LLM sees. `"full"` is the rich Claude Code-style prompt (~1,400 tokens with the default agents); `"compact"` is ~75% smaller — one-line agent type list, terse usage notes — for small/local models where tool-spec tokens are expensive. Per-option details stay in the parameter descriptions in every mode (the parameter schema is never customizable). Applies on the next pi session.
 
 `"custom"` registers your own description from `<cwd>/.pi/agent-tool-description.md` (project) or `<agentDir>/agent-tool-description.md` (global; project wins). The file is read once at tool registration, so edits also apply on the next pi session. Dynamic parts stay live via placeholders — a static agent list would go stale the moment you add a custom agent:
@@ -542,7 +544,7 @@ Launch an autonomous agent. Available types:
 Custom agents live in .pi/agents/ or {{agentDir}}/agents/.
 ```
 
-Placeholders: `{{typeList}}` (full per-agent descriptions), `{{compactTypeList}}` (first sentence each), `{{agentDir}}`, `{{scheduleGuideline}}` (expands with its own leading newline + `- ` bullet when scheduling is on — place it directly after your last rule line; empty when scheduling is off). Unknown placeholders are left verbatim with a stderr warning; a missing or empty file falls back to `"full"` with a warning. Note the usual trust umbrella: a project-level file shapes the orchestrator's prompt, same as project agents and extensions do.
+Placeholders: `{{typeList}}` (full per-agent descriptions), `{{compactTypeList}}` (first sentence each), `{{agentDir}}`, `{{isolationGuideline}}` and `{{scheduleGuideline}}` (each expands with its own leading newline + `- ` bullet when the matching feature is on — place them directly after your last rule line; empty when [worktree isolation](#turning-worktrees-off) / scheduling is off). Unknown placeholders are left verbatim with a stderr warning; a missing or empty file falls back to `"full"` with a warning. Note the usual trust umbrella: a project-level file shapes the orchestrator's prompt, same as project agents and extensions do.
 
 **Starting point:** copy [`examples/agent-tool-description.md`](examples/agent-tool-description.md) — it reproduces the default full description exactly (a CI test keeps it in sync), so you can trim from a known-good baseline instead of writing from scratch.
 
@@ -686,9 +688,9 @@ Set `isolation: worktree` to run an agent in a temporary git worktree:
 Agent({ subagent_type: "refactor", prompt: "...", isolation: "worktree" })
 ```
 
-The agent gets a full, isolated copy of the repository. On completion:
-- **No changes:** worktree is cleaned up automatically
-- **Changes made:** changes are committed to a new branch (`pi-agent-<id>`) and returned in the result
+The agent gets a full, isolated copy of the repository. The worktree directory is removed on completion either way — what differs is whether a branch is left behind:
+- **No changes:** worktree is cleaned up automatically, no branch
+- **Changes made:** changes are committed to a new branch (`pi-agent-<id>`), and the result names the branch and the `git merge` command for it. The branch is the only artifact — the worktree path is gone, so nothing points into it
 - **Agent committed its own work:** the branch is created at the agent's HEAD, preserving its commits (uncommitted leftovers are committed on top first)
 
 The agent's system prompt names the worktree as an isolated copy and tells it to work only there, even if other instructions name the main checkout — otherwise an inherited parent prompt or a task prompt mentioning the project path walks it straight back out of the copy. This is a directive, not a sandbox: an agent with shell access can still `cd` out, so don't rely on `isolation` alone to protect the main checkout.
@@ -696,6 +698,18 @@ The agent's system prompt names the worktree as an isolated copy and tells it to
 The automatic preservation commit uses `--no-verify`, so local pre-commit hooks can't block it — the commit is local-only and never pushed, and pre-push/server-side hooks still apply.
 
 If the worktree cannot be created (not a git repo, no commits, or `git worktree add` fails), the `Agent` call fails with a clear error instead of running unisolated — `isolation: "worktree"` is a strict guarantee, not a hint. The call is reported as a failed tool call, not as a subagent that ran and returned that message, so the model doesn't retry it as if the agent had merely reported a problem. Initialize git and commit at least once, or omit `isolation`.
+
+A worktree is a *copy*, so the agent cannot see uncommitted or staged changes in the main checkout. Never use it to review a working-tree or staged diff: the agent finds an empty `git diff` and reports nothing wrong.
+
+### Turning worktrees off
+
+Three levers, from narrowest to broadest:
+
+- **Per call** — omit `isolation`, or pass `isolation: "off"`. The explicit value exists because some models fill every optional parameter they are offered; with `worktree` as the only legal value they had no way to decline one (#231, #184).
+- **Per agent** — `isolation: off` in an agent file. Frontmatter is authoritative, so this refuses a worktree even when the caller passes `isolation: "worktree"` — the only way to override a caller.
+- **Per project** — `"worktreeIsolation": false` in `subagents.json`. The `Agent` tool's `isolation` parameter disappears from the schema entirely, along with the usage-note bullet that describes it (so it costs the model no context and cannot be passed), and worktree creation is refused on every other path too: agent files, scheduled jobs, and cross-extension RPC. The `/agents` generator also stops offering `isolation:` when writing a new agent file. Use it on a repo large enough that a copy costs real time and disk. The schema and the description are both built at tool registration, so they appear or disappear in the next pi session; the refusal itself takes effect immediately.
+
+  Schema and prose are gated together on purpose. Leaving the bullet in would teach the model to pass a field that is no longer declared — accepted silently, then dropped — and since a refused worktree carries no note on the result, the model would have every reason to go on reporting a `pi-agent-*` branch that was never created. A custom tool description should use the `{{isolationGuideline}}` placeholder rather than hardcoding the bullet, for the same reason.
 
 ## Skill Preloading
 
@@ -744,26 +758,57 @@ This is useful for creating agents that inherit extension tools but should not h
 
 ```
 src/
-  index.ts            # Extension entry: tool/command registration, rendering
+  index.ts            # Extension entry: tool/command registration, /agents menu, rendering
   types.ts            # Type definitions (AgentConfig, AgentRecord, etc.)
+
+  # Agent registry
   default-agents.ts   # Embedded default agent configs (general-purpose, Explore, Plan)
+  custom-agents.ts    # Load user-defined agents from .pi/agents/, .agents/agents/, and global agents
   agent-types.ts      # Unified agent registry (defaults + user), tool name resolution
+  agent-file-toggle.ts # Locate/edit an agent's .md: enabled: toggle, eject to frontmatter
   agent-color.ts      # Claude Code/Agency Agents name color parsing and badge rendering
+
+  # Execution
   agent-runner.ts     # Session creation, execution, graceful max_turns, steer/resume
   agent-manager.ts    # Agent lifecycle, concurrency queue, completion notifications
-  cross-extension-rpc.ts # RPC handlers for cross-extension spawn/ping via pi.events
+  nested-tools.ts     # Delegation tools handed to subagents (nested spawn/collect/steer)
+  child-context.ts    # AsyncLocalStorage flag marking work done for a child session
+  abortable.ts        # Race a wait against Esc without cancelling the background child
   group-join.ts       # Group join manager: batched completion notifications with timeout
-  custom-agents.ts    # Load user-defined agents from .pi/agents/, .agents/agents/, and global agents
+  status-note.ts      # Honest status note + salvaged partial output for non-normal outcomes
+  usage.ts            # Token usage shapes, accumulators, session-stats readers
+
+  # Invocation surface
+  invocation-config.ts # Shared tool-parameter schemas (isolation, join, thinking, ...)
+  model-resolver.ts   # Model resolution: exact provider/modelId with fuzzy fallback
+  enabled-models.ts   # Read pi's enabledModels settings (project over global)
+  model-scope.ts      # scopeModels allowlist policy, shared by top-level and nested tools
+  mention.ts          # `@handle message` grammar: suggestion triggers and send parsing
+  mention-clone.ts    # Run a mention's turn in a cloned conversation, off the main chat
+  cross-extension-rpc.ts # RPC handlers for cross-extension spawn/ping via pi.events
+
+  # Scheduling
+  schedule.ts         # SubagentScheduler: cron / +10m / interval / ISO dispatch
+  schedule-store.ts   # PID-locked, session-scoped, atomic schedule persistence
+
+  # Context & environment
   memory.ts           # Persistent agent memory (resolve, read, build prompt blocks)
   skill-loader.ts     # Preload skills (Pi-standard + Agent Skills spec layouts)
   output-file.ts      # Streaming output file transcripts for agent sessions
   worktree.ts         # Git worktree isolation (create, cleanup, prune)
   prompts.ts          # Config-driven system prompt builder
   context.ts          # Parent conversation context for inherit_context
+  settings.ts         # Persistent settings (~/.pi/agent/subagents.json + .pi/subagents.json)
   env.ts              # Environment detection (git, platform)
+
   ui/
     agent-widget.ts       # Persistent widget: spinners, activity, status icons, theming
+    fleet-list.ts         # FleetView: navigable agent list below the editor
     conversation-viewer.ts # Live conversation overlay for viewing agent sessions
+    viewer-keys.ts        # Viewer scroll keys resolved through user keybindings
+    agent-mention.ts      # `@` roster (running, resumable, and startable agents) + popup rows
+    schedule-menu.ts      # /agents → Scheduled jobs submenu
+    select-item.ts        # Collision-safe ctx.ui.select wrapper (numbered rows)
 ```
 
 ## License

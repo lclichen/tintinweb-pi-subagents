@@ -162,6 +162,15 @@ describe("settings persistence", () => {
     expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
   });
 
+  it("round-trips worktreeIsolation; drops non-boolean", () => {
+    saveSettings({ worktreeIsolation: false }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ worktreeIsolation: false });
+    saveSettings({ worktreeIsolation: true }, projectDir);
+    expect(loadSettings(projectDir)).toEqual({ worktreeIsolation: true });
+    writeProject({ worktreeIsolation: "off" } as any);
+    expect(loadSettings(projectDir)).toEqual({}); // non-boolean dropped
+  });
+
   it("sanitize drops non-boolean schedulingEnabled silently", async () => {
     writeProject({ schedulingEnabled: "yes" } as any);
     expect(loadSettings(projectDir)).toEqual({});
@@ -463,6 +472,7 @@ describe("settings persistence", () => {
       setRememberAgents: vi.fn(),
         setWidgetMode: vi.fn(),
         setOutputTranscript: vi.fn(),
+        setWorktreeIsolation: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
         setFallbackSubagent: vi.fn(),
       };
@@ -584,6 +594,13 @@ describe("settings persistence", () => {
       expect(appliers.setOutputTranscript).toHaveBeenCalledWith(true);
     });
 
+    it("applies worktreeIsolation (both true and false)", () => {
+      applySettings({ worktreeIsolation: false }, appliers);
+      expect(appliers.setWorktreeIsolation).toHaveBeenCalledWith(false);
+      applySettings({ worktreeIsolation: true }, appliers);
+      expect(appliers.setWorktreeIsolation).toHaveBeenCalledWith(true);
+    });
+
     it("applies defaultMaxTurns: 0 as the explicit unlimited marker", () => {
       applySettings({ defaultMaxTurns: 0 }, appliers);
       expect(appliers.setDefaultMaxTurns).toHaveBeenCalledWith(0);
@@ -646,6 +663,7 @@ describe("settings persistence", () => {
       setRememberAgents: vi.fn(),
         setWidgetMode: vi.fn(),
         setOutputTranscript: vi.fn(),
+        setWorktreeIsolation: vi.fn(),
         setMaxSubagentDepth: vi.fn(),
         setFallbackSubagent: vi.fn(),
       };

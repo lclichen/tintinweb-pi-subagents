@@ -3,7 +3,13 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cleanupWorktree, createWorktree, pruneWorktrees } from "../src/worktree.js";
+import {
+  cleanupWorktree,
+  createWorktree,
+  isWorktreeIsolationEnabled,
+  pruneWorktrees,
+  setWorktreeIsolationEnabled,
+} from "../src/worktree.js";
 
 /**
  * Helper: create a temporary git repo with an initial commit.
@@ -325,5 +331,43 @@ describe("cleanupWorktree — failure path", () => {
       cwd: repoDir, stdio: "pipe",
     }).toString();
     expect(files).toContain("work.txt");
+  });
+});
+
+/**
+ * The project switch itself (`worktreeIsolation`, #184). Its consumers —
+ * agent-manager, both tool schemas, the invocation resolver — all mock this
+ * module, so without this block the real singleton is never executed and its
+ * default is never exercised. That default is what every "worktree isolation
+ * still behaves as before" claim rests on.
+ */
+describe("worktree isolation switch", () => {
+  afterEach(() => setWorktreeIsolationEnabled(true));
+
+  it("defaults to enabled", () => {
+    expect(isWorktreeIsolationEnabled()).toBe(true);
+  });
+
+  it("round-trips both ways", () => {
+    setWorktreeIsolationEnabled(false);
+    expect(isWorktreeIsolationEnabled()).toBe(false);
+    setWorktreeIsolationEnabled(true);
+    expect(isWorktreeIsolationEnabled()).toBe(true);
+  });
+
+  // The switch gates callers; it deliberately does not disarm createWorktree
+  // itself, so a caller that has already decided (agent-manager checks first)
+  // still gets a real worktree rather than a silent no-op.
+  it("does not disable createWorktree directly", () => {
+    const repoDir = initGitRepo();
+    try {
+      setWorktreeIsolationEnabled(false);
+      const wt = createWorktree(repoDir, "switch-test");
+      expect(wt).toBeDefined();
+      cleanupWorktree(repoDir, wt!, "switch test");
+    } finally {
+      pruneWorktrees(repoDir);
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 });
