@@ -399,8 +399,11 @@ export const DEFAULT_SETTINGS: Required<Omit<SubagentsSettings, "fallbackSubagen
   disableDefaultAgents: false,
   toolDescriptionMode: "full",
   fleetView: true,
-  agentMentions: "off",
-  rememberAgents: false,
+  // Mirrors the module initializers these defaults must track: "model" (not
+  // "off") keeps @handle mentions enabled, and true persists top-level
+  // subagent sessions (agent-runner.ts / index.ts initializers).
+  agentMentions: "model",
+  rememberAgents: true,
   widgetMode: "background",
   outputTranscript: true,
   worktreeIsolation: true,
