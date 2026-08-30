@@ -14,6 +14,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
 function hostAgentTypes() {
   // Minimal AgentTypeState stand-in for the workflow host (#206).
   return {

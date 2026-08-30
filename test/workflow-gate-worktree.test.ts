@@ -18,6 +18,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+
 function hostAgentTypes() {
   // Minimal AgentTypeState stand-in for the workflow host (#206).
   return {

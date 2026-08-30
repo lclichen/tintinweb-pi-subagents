@@ -12,10 +12,10 @@
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createAgentTypeState } from "../src/agent-types.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAgentTypeState } from "../src/agent-types.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
 
