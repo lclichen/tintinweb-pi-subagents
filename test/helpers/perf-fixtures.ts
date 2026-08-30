@@ -206,6 +206,7 @@ export function mountWidget(
   const widget = new Widget(
     makeManager(records),
     makeActivity(records as { id: string; toolUses: number }[]),
+    new Map(),
     () => opts.mode ?? "all",
     () => opts.showCost ?? false,
     () => opts.showModel ?? false,
@@ -232,7 +233,7 @@ export function mountWidget(
 
 /** Drive `FleetList`: same idea, but its widget renders at an explicit width. */
 export function mountFleet(FleetList: any, records: unknown[]) {
-  const fleet = new FleetList(makeManager(records), makeActivity(records as { id: string; toolUses: number }[]));
+  const fleet = new FleetList(makeManager(records), makeActivity(records as { id: string; toolUses: number }[]), new Map());
   let factory: any;
   fleet.setUICtx({
     setWidget: (_key: string, content: any) => { factory = content; },
@@ -263,6 +264,7 @@ export function mountViewer(
     perfTui(120, 40),
     session,
     record,
+    new Map(),
     undefined,
     perfTheme,
     () => {},

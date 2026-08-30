@@ -67,6 +67,10 @@ interface NestedSpawnOptions {
   maxSubagentDepth: number;
   configCwd?: string;
   rootSessionId?: string;
+  /** Registry the spawned agent's config resolves from (this branch's root). */
+  registry: Map<string, AgentConfig>;
+  /** Registry builder threaded to this child's own nested delegation. */
+  buildRegistryFor?: (configCwd: string) => Map<string, AgentConfig>;
 }
 
 export interface NestedAgentManager {
@@ -102,6 +106,13 @@ export interface NestedToolContext {
   allowedSubagents: "all" | string[];
   /** Root used for agent/config discovery; may differ from the agent's working directory. */
   configCwd: string;
+  /**
+   * Build a registry for a config root, applying the owning session's registry
+   * settings (`disableDefaultAgents`). Provided by the session (index.ts) and
+   * threaded down every nesting level (#206). Optional: standalone
+   * construction falls back to a default-preserving tolerant build.
+   */
+  buildRegistryFor?: (configCwd: string) => Map<string, AgentConfig>;
 }
 
 function textResult(text: string, isError = false) {
@@ -145,9 +156,10 @@ function formatRecord(record: AgentRecord, position: ResultPosition): string {
 /** Build child-safe orchestration tools scoped to one parent agent instance. */
 export function createNestedSubagentTools(context: NestedToolContext): ToolDefinition[] {
   // Agents resolve from a registry built for THIS branch's config root (under
-  // worktree isolation, the copy). Never via registerAgents — that is
-  // process-global state shared with the main session and every other agent.
-  const loadRegistry = () => buildAgentRegistry(loadCustomAgents(context.configCwd));
+  // worktree isolation, the copy) — never from the owning session's registry,
+  // which is shared with the main conversation and every other agent.
+  const loadRegistry = () =>
+    (context.buildRegistryFor ?? ((cwd: string) => buildAgentRegistry(loadCustomAgents(cwd))))(context.configCwd);
   const allowedTypesIn = (registry: Map<string, AgentConfig>): Set<string> | undefined =>
     context.allowedSubagents === "all"
       ? undefined
@@ -293,6 +305,10 @@ export function createNestedSubagentTools(context: NestedToolContext): ToolDefin
         maxSubagentDepth: context.maxSubagentDepth,
         configCwd: context.configCwd,
         rootSessionId,
+        // The child's config resolves from this branch's own root registry —
+        // the same one the allowlist and dispatch above resolved against.
+        registry,
+        buildRegistryFor: context.buildRegistryFor,
       };
 
       // Transcript wiring, same gate as the top-level path: the child's

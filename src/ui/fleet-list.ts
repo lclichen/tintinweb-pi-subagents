@@ -14,7 +14,7 @@
 import { Editor, isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { hasAgentBadge, renderAgentName } from "../agent-color.js";
 import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
-import type { AgentRecord, ViewerMarkdownMode } from "../types.js";
+import type { AgentConfig, AgentRecord, ViewerMarkdownMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal } from "../usage.js";
 import { type AgentActivity, formatCost, type Theme } from "./agent-widget.js";
 import { ConversationViewer, VIEWPORT_HEIGHT_PCT } from "./conversation-viewer.js";
@@ -122,10 +122,18 @@ export class FleetList {
    * minus the close handle, because that overlay belongs to the extension.
    */
   private viewingWorkflowId: string | undefined;
+  /** Owning session's live agent registry (normalized in the constructor). */
+  private registry: Map<string, AgentConfig>;
 
   constructor(
     private manager: AgentManager,
     private agentActivity: Map<string, AgentActivity>,
+    /**
+     * The owning session's live agent registry — display names and colors
+     * resolve here (#206). Stable reference whose contents update on reload;
+     * an empty default covers standalone/test construction.
+     */
+    registry?: Map<string, AgentConfig>,
     /**
      * Read live at render time. Whether each row shows an estimated cost after
      * its token count. Defaults to off — the extension supplies the user's
@@ -144,7 +152,11 @@ export class FleetList {
      * point. Omitted → `m` still cycles, viewer-locally.
      */
     private onViewerMarkdown?: (mode: ViewerMarkdownMode) => void,
-  ) {}
+  ) {
+    // Normalize: an explicit undefined still means "standalone default"
+    // (TS parameter-property defaults key off arguments.length).
+    this.registry = registry ?? new Map();
+  }
 
   // ---- Lifecycle ----
 
@@ -414,6 +426,7 @@ export class FleetList {
           tui,
           session,
           record,
+          this.registry,
           activity,
           theme,
           done,
@@ -525,8 +538,8 @@ export class FleetList {
     // keeps the agent color on the selected row too and only bolds it — which also
     // keeps the row's width fixed as the selection moves.
     const selected = rosterIndex === sel;
-    const name = renderAgentName(record.type, theme, selected
-      ? { fallbackColor: "text", bold: hasAgentBadge(record.type) }
+    const name = renderAgentName(this.registry, record.type, theme, selected
+      ? { fallbackColor: "text", bold: hasAgentBadge(this.registry, record.type) }
       : { fallbackColor: "muted" });
     const description = selected ? theme.fg("text", record.description) : record.description;
     const left = `  ${this.bullet(rosterIndex, sel, theme)} ${name}  ${description}`;

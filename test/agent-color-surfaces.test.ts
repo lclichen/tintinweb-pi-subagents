@@ -1,5 +1,8 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAgents } from "../src/agent-types.js";
+import { moduleDefaultRegistry, registerAgents } from "../src/agent-types.js";
 import subagentsExtension from "../src/index.js";
 import type { AgentConfig, AgentRecord } from "../src/types.js";
 import { type AgentActivity, AgentWidget } from "../src/ui/agent-widget.js";
@@ -44,8 +47,23 @@ interface RegisteredTool {
   ): RenderedComponent;
 }
 
+let colorCwd: string | undefined;
+let originalCwd: string | undefined;
+
 function registerColoredReviewer(color = "purple"): void {
   registerAgents(new Map([[TYPE, { ...config, color }]]));
+  // #206: the extension resolves render names/colors from its own per-session
+  // registry, built from the activation cwd — so surface the agent as a real
+  // .pi/agents file there too, not just in the module-level test registry.
+  const dir = mkdtempSync(join(tmpdir(), "color-surfaces-"));
+  mkdirSync(join(dir, ".pi", "agents"), { recursive: true });
+  writeFileSync(
+    join(dir, ".pi", "agents", `${TYPE}.md`),
+    `---\nname: ${TYPE}\ndisplay_name: ${DISPLAY_NAME}\ndescription: Reviews code\ncolor: ${color}\ntools: none\n---\nReviews code.\n`,
+  );
+  originalCwd ??= process.cwd();
+  process.chdir(dir);
+  colorCwd = dir;
 }
 
 function makeRecord(): AgentRecord {
@@ -102,6 +120,11 @@ beforeEach(() => {
 
 afterEach(() => {
   registerAgents(new Map());
+  if (colorCwd) {
+    process.chdir(originalCwd!);
+    rmSync(colorCwd, { recursive: true, force: true });
+    colorCwd = undefined; originalCwd = undefined;
+  }
 });
 
 describe("custom agent color runtime surfaces", () => {
@@ -142,8 +165,21 @@ describe("custom agent color runtime surfaces", () => {
 
       // An agent without a color must render the pre-badge line byte for byte:
       // no badge, and no row background of our own for HTML export to pick up.
-      registerAgents(new Map([[TYPE, { ...config, color: undefined }]]));
-      const uncolored = render({ isPartial: false, isError: false });
+      // #206: the tool renders from the extension's own registry, so the
+      // uncolored case re-activates against a fixture without `color:` (the
+      // module-level registry the old test mutated is no longer consulted).
+      writeFileSync(
+        join(colorCwd!, ".pi", "agents", `${TYPE}.md`),
+        `---\nname: ${TYPE}\ndisplay_name: ${DISPLAY_NAME}\ndescription: Reviews code\ntools: none\n---\nReviews code.\n`,
+      );
+      const uncoloredPi = makePi();
+      subagentsExtension(uncoloredPi.pi);
+      const uncoloredTool = uncoloredPi.tools.get("Agent")!;
+      const uncolored = uncoloredTool.renderCall(
+        { subagent_type: TYPE, description: "Review this change" },
+        theme,
+        { isPartial: false, isError: false },
+      ).render(120).join("\n");
       expect(uncolored.trimEnd()).toBe(`▸ <toolTitle>*${DISPLAY_NAME}*</toolTitle>  <muted>Review this change</muted>`);
     } finally {
       await handlers.get("session_shutdown")?.({}, { hasUI: false, ui: {} });
@@ -155,6 +191,7 @@ describe("custom agent color runtime surfaces", () => {
     const widget = new AgentWidget(
       { listAgents: () => [record] } as unknown as ConstructorParameters<typeof AgentWidget>[0],
       new Map([[record.id, makeActivity()]]),
+      moduleDefaultRegistry(),
       () => "all",
     );
     let factory: WidgetFactory | undefined;
@@ -189,7 +226,7 @@ describe("custom agent color runtime surfaces", () => {
       abort: vi.fn(() => true),
       steer: vi.fn(() => true),
     } as unknown as ConstructorParameters<typeof FleetList>[0];
-    const fleet = new FleetList(manager, new Map());
+    const fleet = new FleetList(manager, new Map(), moduleDefaultRegistry());
     let factory: WidgetFactory | undefined;
     fleet.setUICtx({
       setWidget: (_key, content) => {
@@ -229,6 +266,7 @@ describe("custom agent color runtime surfaces", () => {
       { terminal: { rows: 30, columns: 120 }, requestRender: vi.fn() } as unknown as ConstructorParameters<typeof ConversationViewer>[0],
       record.session!,
       record,
+      moduleDefaultRegistry(),
       undefined,
       theme,
       vi.fn(),

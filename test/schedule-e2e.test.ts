@@ -12,6 +12,7 @@
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createAgentTypeState } from "../src/agent-types.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +26,12 @@ type FakeRecord = { status: string; promise: Promise<string>; resolve: () => voi
  * record whose promise can be resolved at test time, status is mutable so
  * the test can assert success vs error inference.
  */
+function e2eState() {
+  const state = createAgentTypeState();
+  state.register(new Map());
+  return state;
+}
+
 function makeFaithfulManager(initialStatus = "completed") {
   const records = new Map<string, FakeRecord>();
   return {
@@ -88,7 +95,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
   it("one-shot job: real setTimeout fires, agent runs, store reflects success", async () => {
     const manager = makeFaithfulManager("completed");
     const pi = makePi();
-    scheduler.start(pi, makeCtx(), manager, store);
+    scheduler.start(pi, makeCtx(), manager, store, e2eState());
 
     // Fire ~100ms in the future. detectSchedule normalizes "+100ms" — but our
     // parser only accepts s/m/h/d, so use a near-future ISO timestamp instead.
@@ -117,7 +124,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
   it("one-shot job that errors: store records lastStatus error (regression — bug #1)", async () => {
     const manager = makeFaithfulManager("error");  // Agent terminates with error status
     const pi = makePi();
-    scheduler.start(pi, makeCtx(), manager, store);
+    scheduler.start(pi, makeCtx(), manager, store, e2eState());
 
     const future = new Date(Date.now() + 100).toISOString();
     const job = scheduler.addJob({
@@ -138,7 +145,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
   it("interval job: fires repeatedly, runCount grows", async () => {
     const manager = makeFaithfulManager("completed");
     const pi = makePi();
-    scheduler.start(pi, makeCtx(), manager, store);
+    scheduler.start(pi, makeCtx(), manager, store, e2eState());
 
     // 100ms interval — wait for ~3 fires
     const job = scheduler.addJob({
@@ -165,7 +172,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
   it("persistence: schedules survive re-instantiating the store on the same file", async () => {
     const manager = makeFaithfulManager("completed");
     const pi = makePi();
-    scheduler.start(pi, makeCtx(), manager, store);
+    scheduler.start(pi, makeCtx(), manager, store, e2eState());
 
     const future = new Date(Date.now() + 60_000).toISOString();  // far enough not to fire
     const job = scheduler.addJob({
@@ -187,7 +194,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
   it("on-disk file shape: version=1 plus jobs array", async () => {
     const manager = makeFaithfulManager("completed");
     const pi = makePi();
-    scheduler.start(pi, makeCtx(), manager, store);
+    scheduler.start(pi, makeCtx(), manager, store, e2eState());
 
     scheduler.addJob({
       name: "shape-test",
@@ -212,7 +219,7 @@ describe("SubagentScheduler — end-to-end with real timers", () => {
   it("subagents:scheduled events fire across the lifecycle", async () => {
     const manager = makeFaithfulManager("completed");
     const pi = makePi();
-    scheduler.start(pi, makeCtx(), manager, store);
+    scheduler.start(pi, makeCtx(), manager, store, e2eState());
 
     const future = new Date(Date.now() + 100).toISOString();
     const job = scheduler.addJob({

@@ -1,7 +1,7 @@
 import { Editor, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentManager } from "../src/agent-manager.js";
-import { registerAgents } from "../src/agent-types.js";
+import { moduleDefaultRegistry, registerAgents } from "../src/agent-types.js";
 import type { AgentConfig, AgentRecord, ViewerMarkdownMode } from "../src/types.js";
 import { type AgentActivity, getDisplayName } from "../src/ui/agent-widget.js";
 import {
@@ -147,7 +147,7 @@ function harness(
   };
 
   const manager = fakeManager(agents);
-  const fleet = new FleetList(manager, new Map(), undefined, opts.viewerMarkdown, opts.onViewerMarkdown);
+  const fleet = new FleetList(manager, new Map(), moduleDefaultRegistry(), () => false, opts.viewerMarkdown, opts.onViewerMarkdown);
   fleet.setUICtx(ui);
   let workflows: FleetWorkflow[] = [];
   const openedWorkflows: string[] = [];
@@ -260,7 +260,7 @@ describe("FleetList navigation", () => {
     expect(selected).toContain("<text>one</text>");
     expect(selected).toMatch(/<text>\d+s · ↓ [\d.]+k? tokens<\/text>/);
     // Agent display name rendered with the text token too (this type has no badge).
-    expect(selected).toContain(`<text>${getDisplayName("general-purpose")}</text>`);
+    expect(selected).toContain(`<text>${getDisplayName(new Map(), "general-purpose")}</text>`);
     // Inactive rows keep the muted/dim treatment.
     const unselected = h.render().find(l => l.includes("two"))!;
     expect(unselected).toContain("<dim>○</dim>");
@@ -422,7 +422,7 @@ describe("FleetList rendering", () => {
     expect(lines.find(l => l.includes("main"))).toContain("●"); // main selected by default
     const agentLine = lines.find(l => l.includes("Sleep then report 1"))!;
     expect(agentLine).toContain("○");
-    expect(agentLine).toContain(getDisplayName("general-purpose"));
+    expect(agentLine).toContain(getDisplayName(new Map(), "general-purpose"));
     expect(agentLine).toContain("↓ 13.1k tokens");
     expect(agentLine).toMatch(/\d+s · ↓/); // "<seconds>s · ↓ ..." (timing-agnostic)
   });
@@ -572,7 +572,7 @@ describe("FleetList cost display", () => {
 
   function row(showCost: boolean, cost: number, activity?: Map<string, AgentActivity>): string {
     const record = makeRecord({ lifetimeUsage: { input: 13100, output: 0, cacheWrite: 0, cost } });
-    const fleet = new FleetList(fakeManager([record]), activity ?? new Map(), () => showCost);
+    const fleet = new FleetList(fakeManager([record]), activity ?? new Map(), new Map(), () => showCost);
     let factory: any;
     fleet.setUICtx({
       setWidget: (_k: string, c: any) => { factory = c; },

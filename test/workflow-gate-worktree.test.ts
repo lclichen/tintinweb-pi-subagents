@@ -18,6 +18,15 @@
  */
 
 import { execFileSync } from "node:child_process";
+function hostAgentTypes() {
+  // Minimal AgentTypeState stand-in for the workflow host (#206).
+  return {
+    resolveSpawnType: (requested: unknown) => resolveSpawnTypeIn(moduleDefaultRegistry(), requested),
+    getAgentConfig: (name: string) => getAgentConfigIn(moduleDefaultRegistry(), name),
+    registry: () => new Map(),
+  } as any;
+}
+
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +39,7 @@ vi.mock("../src/agent-runner.js", () => ({
 
 import { AgentManager } from "../src/agent-manager.js";
 import { runAgent } from "../src/agent-runner.js";
-import { registerAgents } from "../src/agent-types.js";
+import { getAgentConfigIn, moduleDefaultRegistry, registerAgents, resolveSpawnTypeIn } from "../src/agent-types.js";
 import { createWorkflowHost } from "../src/workflow/host.js";
 import type { WorkflowAgentEntry, WorkflowEntry } from "../src/workflow/progress.js";
 import { runWorkflow, type WorkflowSpawnRequest } from "../src/workflow/runtime.js";
@@ -153,7 +162,7 @@ describe("gate on an isolated child", () => {
 
   it("runs the gate inside the child's worktree, while it still exists", async () => {
     const { pi, gateRuns } = makePi();
-    const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
+    const host = createWorkflowHost({ agentTypes: hostAgentTypes(), pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await host.spawnAgent(
       spawnRequest({ isolation: "worktree", gate: "npm test" }),
@@ -177,7 +186,7 @@ describe("gate on an isolated child", () => {
 
   it("fails the agent with the gate's output, and still cleans the worktree up", async () => {
     const { pi, gateRuns } = makePi(() => execFail("FAIL src/auth.test.ts\n1 failing"));
-    const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
+    const host = createWorkflowHost({ agentTypes: hostAgentTypes(), pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await runWorkflow({
       script: `${HEAD}return await agent("fix it", { gate: "npm test", isolation: "worktree" });`,
@@ -202,7 +211,7 @@ describe("gate on an isolated child", () => {
 
   it("names the command when a failing gate in a worktree says nothing", async () => {
     const { pi } = makePi(() => ({ stdout: "  ", stderr: "", code: 1, killed: false }));
-    const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
+    const host = createWorkflowHost({ agentTypes: hostAgentTypes(), pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await runWorkflow({
       script: `${HEAD}return await agent("x", { gate: "npm run lint", isolation: "worktree" });`,
@@ -214,7 +223,7 @@ describe("gate on an isolated child", () => {
 
   it("counts a killed gate as failed even though pi.exec reports exit code 0", async () => {
     const { pi } = makePi(() => ({ stdout: "", stderr: "", code: 0, killed: true }));
-    const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
+    const host = createWorkflowHost({ agentTypes: hostAgentTypes(), pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await host.spawnAgent(spawnRequest({ isolation: "worktree", gate: "sleep 999" }));
 
@@ -229,7 +238,7 @@ describe("gate on an isolated child", () => {
     const { pi, gateRuns } = makePi(() => {
       throw new Error("spawn sh ENOENT");
     });
-    const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
+    const host = createWorkflowHost({ agentTypes: hostAgentTypes(), pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await runWorkflow({
       script: `${HEAD}return await agent("x", { gate: "npm test", isolation: "worktree" });`,
@@ -248,7 +257,7 @@ describe("gate on an isolated child", () => {
       return { responseText: "done", session: { dispose: vi.fn() } as any, aborted: false, steered: true };
     });
     const { pi, gateRuns } = makePi();
-    const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
+    const host = createWorkflowHost({ agentTypes: hostAgentTypes(), pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await host.spawnAgent(spawnRequest({ isolation: "worktree", gate: "npm test" }));
 
@@ -268,7 +277,7 @@ describe("gate on an isolated child", () => {
       failure: "provider exploded",
     } as any);
     const { pi, gateRuns } = makePi();
-    const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
+    const host = createWorkflowHost({ agentTypes: hostAgentTypes(), pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await host.spawnAgent(spawnRequest({ isolation: "worktree", gate: "npm test" }));
 
@@ -298,7 +307,7 @@ describe("gate on a child with no worktree of its own", () => {
 
   it("runs the gate once, in the session's own tree", async () => {
     const { pi, gateRuns } = makePi();
-    const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
+    const host = createWorkflowHost({ agentTypes: hostAgentTypes(), pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await runWorkflow({
       script: `${HEAD}return await agent("x", { gate: "npm test" });`,
@@ -332,7 +341,7 @@ describe("an isolated child with no gate", () => {
 
   it("is untouched: nothing runs, and the work still lands on a branch", async () => {
     const { pi, gateRuns } = makePi();
-    const host = createWorkflowHost({ pi, ctx: ctx({ cwd: repo }), manager });
+    const host = createWorkflowHost({ agentTypes: hostAgentTypes(), pi, ctx: ctx({ cwd: repo }), manager });
 
     const result = await host.spawnAgent(spawnRequest({ isolation: "worktree" }));
 

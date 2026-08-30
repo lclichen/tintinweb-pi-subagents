@@ -115,7 +115,7 @@ describe("AgentWidget — one frame does not rescan per agent", () => {
       },
     } as any;
 
-    const widget = new AgentWidget(manager, makeActivity(records), () => "all", () => false, () => false);
+    const widget = new AgentWidget(manager, makeActivity(records), new Map(), () => "all", () => false, () => false);
     let factory: any;
     widget.setUICtx({ setStatus: () => {}, setWidget: (_k: string, c: any) => { factory = c; } } as any);
     widget.update();

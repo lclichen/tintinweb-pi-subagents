@@ -8,8 +8,8 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { renderAgentName } from "../agent-color.js";
 import { type AgentManager, isTopLevelAgent } from "../agent-manager.js";
-import { getConfig } from "../agent-types.js";
-import type { AgentInvocation, SubagentType, WidgetMode } from "../types.js";
+import { getConfigIn } from "../agent-types.js";
+import type { AgentConfig, AgentInvocation, SubagentType, WidgetMode } from "../types.js";
 import { getLifetimeCost, getLifetimeTotal, getSessionContextPercent, type LifetimeUsage, type SessionLike } from "../usage.js";
 
 // ---- Constants ----
@@ -175,14 +175,14 @@ export function formatDuration(startedAt: number, completedAt?: number): string 
   return `${formatMs(Date.now() - startedAt)} (running)`;
 }
 
-/** Get display name for any agent type (built-in or custom). */
-export function getDisplayName(type: SubagentType): string {
-  return getConfig(type).displayName;
+/** Get display name for any agent type (built-in or custom) from a registry. */
+export function getDisplayName(registry: Map<string, AgentConfig>, type: SubagentType): string {
+  return getConfigIn(registry, type).displayName;
 }
 
 /** Short label for prompt mode: "twin" for append, nothing for replace (the default). */
-export function getPromptModeLabel(type: SubagentType): string | undefined {
-  const config = getConfig(type);
+export function getPromptModeLabel(registry: Map<string, AgentConfig>, type: SubagentType): string | undefined {
+  const config = getConfigIn(registry, type);
   return config.promptMode === "append" ? "twin" : undefined;
 }
 
@@ -266,10 +266,20 @@ export class AgentWidget {
   private tui: any | undefined;
   /** Last status bar text, used to avoid redundant setStatus calls. */
   private lastStatusText: string | undefined;
+  /** Owning session's live agent registry (normalized in the constructor). */
+  private registry: Map<string, AgentConfig>;
 
   constructor(
     private manager: AgentManager,
     private agentActivity: Map<string, AgentActivity>,
+    /**
+     * The owning session's live agent registry — display names and colors
+     * resolve here (#206). Stable reference: the extension passes its
+     * per-session registry, whose contents update on reload. Defaults to an
+     * empty registry for standalone/test construction, where names fall
+     * through to the hardcoded tier.
+     */
+    registry?: Map<string, AgentConfig>,
     /**
      * Read live at render time. Selects which agents the widget shows — see
      * `WidgetMode`. Defaults to `"all"` when a caller supplies no policy; the
@@ -290,7 +300,9 @@ export class AgentWidget {
      * conversation viewer unconditionally.
      */
     private showModel: () => boolean = () => false,
-  ) {}
+  ) {
+    this.registry = registry ?? new Map();
+  }
 
   /**
    * Agents eligible for the widget, per the current `WidgetMode`:
@@ -371,7 +383,7 @@ export class AgentWidget {
 
   /** Render a finished agent line. */
   private renderFinishedLine(a: { id: string; type: SubagentType; status: string; description: string; toolUses: number; startedAt: number; completedAt?: number; error?: string; lifetimeUsage?: LifetimeUsage }, theme: Theme): string {
-    const modeLabel = getPromptModeLabel(a.type);
+    const modeLabel = getPromptModeLabel(this.registry, a.type);
     const duration = formatMs((a.completedAt ?? Date.now()) - a.startedAt);
 
     let icon: string;
@@ -407,7 +419,7 @@ export class AgentWidget {
     parts.push(duration);
 
     const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
-    return `${icon} ${renderAgentName(a.type, theme, { fallbackColor: "dim" })}${modeTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
+    return `${icon} ${renderAgentName(this.registry, a.type, theme, { fallbackColor: "dim" })}${modeTag}  ${theme.fg("dim", a.description)} ${theme.fg("dim", "·")} ${theme.fg("dim", parts.join(" · "))}${statusText}`;
   }
 
   /**
@@ -445,7 +457,7 @@ export class AgentWidget {
 
     const runningLines: string[][] = []; // each entry is [header, activity]
     for (const a of running) {
-      const modeLabel = getPromptModeLabel(a.type);
+      const modeLabel = getPromptModeLabel(this.registry, a.type);
       const modeTag = modeLabel ? ` ${theme.fg("dim", `(${modeLabel})`)}` : "";
       const elapsed = formatMs(Date.now() - a.startedAt);
 
@@ -480,7 +492,7 @@ export class AgentWidget {
       const activity = bg ? describeActivity(bg.activeTools, bg.responseText) : "thinking…";
 
       runningLines.push([
-        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentName(a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
+        truncate(theme.fg("dim", "├─") + ` ${theme.fg("accent", frame)} ${renderAgentName(this.registry, a.type, theme, { bold: true })}${modeTag}  ${theme.fg("muted", a.description)} ${theme.fg("dim", "·")} ${fgPreservingNestedStyles(theme, "dim", statsText)}`),
         truncate(theme.fg("dim", "│  ") + theme.fg("dim", `  ⎿  ${activity}`)),
       ]);
     }

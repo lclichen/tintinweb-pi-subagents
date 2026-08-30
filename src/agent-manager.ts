@@ -22,7 +22,7 @@ import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-wor
 import { resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
 import { assignHandle, handleBase } from "./mention.js";
 import { describeModel } from "./model-resolver.js";
-import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, SubagentType, ThinkingLevel } from "./types.js";
+import type { AgentConfig, AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, SubagentType, ThinkingLevel } from "./types.js";
 import { addUsage, type LifetimeUsage } from "./usage.js";
 import type { CompiledSchema } from "./workflow/json-schema.js";
 import { cleanupWorktree, createWorktree, isWorktreeIsolationEnabled, pruneWorktrees, } from "./worktree.js";
@@ -301,6 +301,10 @@ interface SpawnOptions {
   configCwd?: string;
   /** Root session id, inherited by nested launches so transcripts stay grouped. */
   rootSessionId?: string;
+  /** Registry the spawned agent's config resolves from — the spawning session's live registry, or a nested branch's root registry. */
+  registry: Map<string, AgentConfig>;
+  /** Registry builder threaded to nested delegation (applies the session's `disableDefaultAgents`). */
+  buildRegistryFor?: (configCwd: string) => Map<string, AgentConfig>;
 }
 
 interface ResumeOptions {
@@ -362,6 +366,12 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
 
 export class AgentManager {
   private agents = new Map<string, AgentRecord>();
+  /**
+   * The owning session's working directory — where dispose() prunes orphaned
+   * worktrees. Set by the session (index.ts, on session_start); falls back to
+   * `process.cwd()`, which is the same directory in the CLI (#206).
+   */
+  sessionCwd?: string;
   private cleanupInterval: ReturnType<typeof setInterval>;
   private onComplete?: OnAgentComplete;
   private onStart?: OnAgentStart;
@@ -760,6 +770,8 @@ export class AgentManager {
 
     const promise = runAgent(ctx, type, prompt, {
       pi,
+      registry: options.registry,
+      buildRegistryFor: options.buildRegistryFor,
       agentId: id,
       model: options.model,
       maxTurns: options.maxTurns,
@@ -1568,7 +1580,7 @@ export class AgentManager {
       // shutdown below rather than after it, so the git calls have that window to
       // finish in instead of racing the process exit that follows.
       const prune = (repo: string) => { pruneWorktrees(pi, repo).catch(() => {}); };
-      prune(process.cwd());
+      prune(this.sessionCwd ?? process.cwd());
       // Also prune repos that caller-supplied cwds created worktrees in — a clean
       // exit with in-flight agents would otherwise leave stale registrations there.
       for (const repo of this.worktreeRepos) prune(repo);

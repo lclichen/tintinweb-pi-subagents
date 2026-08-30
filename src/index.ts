@@ -11,7 +11,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
@@ -20,7 +20,7 @@ import { hasAgentBadge, renderAgentName } from "./agent-color.js";
 import { buildNewAgentFile, disableInContent, enableInContent, isEmptyStub, locateAgentFile, personalAgentsDir, projectAgentsDir, serializeAgentFile } from "./agent-file-toggle.js";
 import { AgentManager, isTopLevelAgent } from "./agent-manager.js";
 import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, getRememberAgents, normalizeMaxTurns, resolveEffectiveMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, setRememberAgents, steerAgent } from "./agent-runner.js";
-import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, getConfig, getFallbackSubagent, isDefaultsDisabled, NO_FALLBACK, registerAgents, resolveSpawnType, resolveType, setDefaultsDisabled, setFallbackSubagent } from "./agent-types.js";
+import { BUILTIN_TOOL_NAMES, createAgentTypeState, NO_FALLBACK } from "./agent-types.js";
 import { inChildSessionContext } from "./child-context.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
@@ -34,7 +34,7 @@ import { getMaxSubagentDepth, setMaxSubagentDepth } from "./nested-tools.js";
 import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, sessionTaskDir, setOutputTranscriptDefault, streamToOutputFile, writeInitialEntry } from "./output-file.js";
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
-import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
+import { applyAndEmitLoaded, applyDefaultSettings, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
 import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
 import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
@@ -388,14 +388,42 @@ export default function (pi: ExtensionAPI) {
       "Use the `=` form — the space form consumes the next argument, which would swallow a following prompt.",
   });
 
+  // Per-session agent-type state (#206): the process-level singletons this
+  // extension used to keep made concurrent SDK sessions in one host share (and
+  // fight over) one registry. Each activation closure now owns its state.
+  const agentTypes = createAgentTypeState();
+  // The session's working directory. Adopted from ctx.cwd on session_start;
+  // activation-time default is process.cwd() (identical in the CLI).
+  let sessionCwd = process.cwd();
+  const adoptSessionCwd = (cwd: string | undefined) => {
+    if (!cwd) return;
+    // Resolve against the process cwd so spelling differences (trailing
+    // separator, relative segments) can't fork the adopted value.
+    const resolved = resolvePath(cwd);
+    if (resolved === sessionCwd) return;
+    sessionCwd = resolved;
+  };
+
   // Read directly rather than waiting for applyAndEmitLoaded below: this decides
   // the initial load, which happens hundreds of lines before settings are applied.
-  let strictAgentFiles = loadSettings(process.cwd()).strictAgentFiles === true;
+  let strictAgentFiles = loadSettings(sessionCwd).strictAgentFiles === true;
 
   /** Reload agents from project/global custom agent dirs and merge with defaults (called on init and each Agent invocation). */
   const reloadCustomAgents = (strict = false) => {
-    const userAgents = loadCustomAgents(process.cwd(), strict);
-    registerAgents(userAgents);
+    let userAgents: Map<string, AgentConfig>;
+    try {
+      userAgents = loadCustomAgents(sessionCwd, strict);
+    } catch (err) {
+      if (!strict) throw err;
+      // A strict load aborts at the FIRST bad file, but everything parsed
+      // before it is sound. Register the tolerant view (which skips bad files
+      // with a warning) so dispatch and the advertised schema stay
+      // self-consistent with what reloads can still reach, then rethrow —
+      // the caller decides whether failing closed stops the flow (#206).
+      agentTypes.register(loadCustomAgents(sessionCwd, false));
+      throw err;
+    }
+    agentTypes.register(userAgents);
   };
 
   // Initial load — the only strict one. A bad edit mid-session must not kill the
@@ -670,7 +698,7 @@ export default function (pi: ExtensionAPI) {
     // envelopes at the RPC boundary. Reload first so an agent file added mid
     // session is spawnable here too, not only through the Agent tool.
     reloadCustomAgents();
-    const dispatch = resolveSpawnType(type);
+    const dispatch = agentTypes.resolveSpawnType(type);
     if (!dispatch.ok) throw new Error(dispatch.message);
     // Every programmatic spawn lands here — cross-extension RPC, both `@handle`
     // mention paths, and the `Symbol.for("pi-subagents:manager")` registry — and
@@ -687,10 +715,10 @@ export default function (pi: ExtensionAPI) {
     // built with `undefined` renders `↻3` where the Agent tool renders `↻3≤20`.
     // Like the tool's own, it is a prediction — editing the agent file mid-run
     // leaves the displayed ceiling stale.
-    const { state, callbacks } = createActivityTracker(resolveEffectiveMaxTurns(dispatch.type, options?.maxTurns));
+    const { state, callbacks } = createActivityTracker(resolveEffectiveMaxTurns(dispatch.type, options?.maxTurns, agentTypes.registry()));
     // Repaints are left to the manager's `onStart` callback, which already starts
     // the widget/fleet timers for agents that enter this way.
-    const id = manager.spawn(piRef, ctxRef, dispatch.type, prompt, { ...options, ...callbacks });
+    const id = manager.spawn(piRef, ctxRef, dispatch.type, prompt, { registry: agentTypes.registry(), ...options, ...callbacks });
     agentActivity.set(id, state);
     return id;
   };
@@ -774,7 +802,7 @@ export default function (pi: ExtensionAPI) {
       if (!sessionId) return;  // sessionId not yet available — try again on next event
       const path = resolveStorePath(ctx.cwd, sessionId);
       const store = new ScheduleStore(path);
-      scheduler.start(pi, ctx, manager, store);
+      scheduler.start(pi, ctx, manager, store, agentTypes);
       pi.events.emit("subagents:scheduler_ready", { sessionId, jobCount: store.list().length });
     } catch (err) {
       // Scheduling is non-essential — log and move on so the rest of the
@@ -788,6 +816,39 @@ export default function (pi: ExtensionAPI) {
   // bound session_start, so a filtered-out activation never advertises (#142).
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    // Adopt the session's cwd (#206): in an embedded host (pi-web, SDK) the
+    // process cwd is the host's, not this session's project. Everything below
+    // (custom-agent discovery, subagents.json, session-scoped stores) keys off
+    // sessionCwd. When it differs from what activation already loaded, rebuild
+    // agent state and re-apply settings for THIS directory — after resetting
+    // in-memory state to the built-in defaults, so keys the new tree leaves
+    // unset don't inherit the previous directory's policy.
+    const previousCwd = sessionCwd;
+    adoptSessionCwd(ctx.cwd);
+    manager.sessionCwd = sessionCwd;
+    if (sessionCwd !== previousCwd) {
+      // Rebuild everything that activation keyed off the process cwd: reset
+      // in-memory settings to the built-in defaults first, then layer THIS
+      // directory's settings on top, and re-discover its custom agents —
+      // otherwise keys the new tree leaves unset inherit the old directory's
+      // policy, and its agents resolve through the old registry.
+      applyDefaultSettings(settingsAppliers);
+      applyAndEmitLoaded(settingsAppliers, emitSettings, sessionCwd);
+      // A strict failure still converges the state (reloadCustomAgents
+      // registers the tolerant roster before rethrowing) — re-register the
+      // Agent tool with the adopted roster either way, THEN surface the
+      // failure so pi reports it as an extension error (#206).
+      let strictFailure: unknown;
+      let strictFailureTag = false;
+      try {
+        reloadCustomAgents(strictAgentFiles);
+      } catch (err) {
+        strictFailure = err;
+        strictFailureTag = true;
+      }
+      registerAgentTool();
+      if (strictFailureTag) throw strictFailure;
+    }
     if (ctx.hasUI) {
       widget.setUICtx(ctx.ui);
       fleet.setUICtx(ctx.ui as any);
@@ -838,7 +899,7 @@ export default function (pi: ExtensionAPI) {
           current,
           // Plain text, not renderAgentName: the same label FleetView and the
           // widget show, but the autocomplete description cannot carry ANSI.
-          () => mentionRoster(manager, mentionTypes(), type => getConfig(type).displayName),
+          () => mentionRoster(manager, mentionTypes(), type => agentTypes.getConfig(type).displayName),
           isAgentMentionsEnabled,
         ),
       );
@@ -852,7 +913,7 @@ export default function (pi: ExtensionAPI) {
 
   /** Agent types `@` can start, in the shape the roster wants. */
   const mentionTypes = (): TypeInfo[] =>
-    getAvailableTypes().map(name => ({ name, description: getAgentConfig(name)?.description ?? name }));
+    agentTypes.getAvailableTypes().map(name => ({ name, description: agentTypes.getAgentConfig(name)?.description ?? name }));
 
   /**
    * `@handle message` typed at the prompt addresses that agent instead of the
@@ -929,7 +990,7 @@ export default function (pi: ExtensionAPI) {
         // agent, so its frontmatter is what governs — `output_transcript: false`
         // must keep holding, since record.outputFile is the sole gate every
         // downstream consumer keys off and a resume must not re-open it.
-        const config = getAgentConfig(record.type);
+        const config = agentTypes.getAgentConfig(record.type);
         const resumedRecord = await startBackgroundResume(ctx, record, mention.message, {
           outputTranscript: config?.outputTranscript ?? getOutputTranscriptDefault(),
           maxTurns: normalizeMaxTurns(config?.maxTurns ?? getDefaultMaxTurns()),
@@ -972,7 +1033,7 @@ export default function (pi: ExtensionAPI) {
       // continuing it, and the new record would re-tombstone under the
       // substitute, so the handle would never find its way back.
       reloadCustomAgents();
-      const dispatch = resolveSpawnType(entry.type);
+      const dispatch = agentTypes.resolveSpawnType(entry.type);
       if (!dispatch.ok || dispatch.fellBackFrom !== undefined) {
         // The tombstone stays: re-enabling the agent makes the handle work
         // again, which a drop would foreclose.
@@ -1014,8 +1075,8 @@ export default function (pi: ExtensionAPI) {
     // No agent under that handle — but the name may still be an agent type, in
     // which case the mention starts one.
     const typeHandle = mention.handle;
-    const type = resolveHandleToType(typeHandle, getAvailableTypes())
-      ?? (alias ? resolveHandleToType(alias, getAvailableTypes()) : undefined);
+    const type = resolveHandleToType(typeHandle, agentTypes.getAvailableTypes())
+      ?? (alias ? resolveHandleToType(alias, agentTypes.getAvailableTypes()) : undefined);
     if (!type) return { action: "continue" };
 
     // Claude Code never starts the agent itself: `@agent-<type>` becomes an
@@ -1129,13 +1190,13 @@ export default function (pi: ExtensionAPI) {
   // everything else; "off" = hide the widget entirely. Read live at render time.
   let widgetMode: WidgetMode = "background";
   function getWidgetMode(): WidgetMode { return widgetMode; }
-  const widget = new AgentWidget(manager, agentActivity, getWidgetMode, isShowCostEnabled, isShowModelEnabled);
+  const widget = new AgentWidget(manager, agentActivity, agentTypes.registry(), getWidgetMode, isShowCostEnabled, isShowModelEnabled);
   function setWidgetMode(m: WidgetMode): void { widgetMode = m; widget.update(); }
 
   // Claude Code-style FleetView: navigable list of main + subagents below the editor.
   // The last two arguments keep a conversation overlay opened here identical to
   // one opened from `/agents`: same setting on the way in, same persist out.
-  const fleet = new FleetList(manager, agentActivity, isShowCostEnabled, getViewerMarkdown,
+  const fleet = new FleetList(manager, agentActivity, agentTypes.registry(), isShowCostEnabled, getViewerMarkdown,
     (mode) => chooseViewerMarkdown(mode, currentCtx as unknown as ExtensionCommandContext | undefined));
   let fleetViewEnabled = true;
   function isFleetViewEnabled(): boolean { return fleetViewEnabled; }
@@ -1208,7 +1269,7 @@ export default function (pi: ExtensionAPI) {
   // State lives in agent-types.ts (isDefaultsDisabled) because registerAgents
   // needs it; this wrapper just re-registers after flipping it.
   function setDisableDefaultAgents(b: boolean): void {
-    setDefaultsDisabled(b);
+    agentTypes.setDefaultsDisabled(b);
     reloadCustomAgents(); // re-register with new setting
   }
 
@@ -1366,10 +1427,10 @@ export default function (pi: ExtensionAPI) {
 
   /** Build the full type list text dynamically from available agents only. */
   const buildTypeListText = () => {
-    const available = getAvailableTypes();
+    const available = agentTypes.getAvailableTypes();
 
     return available.map((name) => {
-      const cfg = getAgentConfig(name);
+      const cfg = agentTypes.getAgentConfig(name);
       const modelSuffix = cfg?.model ? ` (${getModelLabelFromConfig(cfg.model)})` : "";
       const toolsSuffix = ` (Tools: ${formatToolsSuffix(cfg)})`;
       return `- ${name}: ${cfg?.description ?? name}${modelSuffix}${toolsSuffix}`;
@@ -1384,8 +1445,8 @@ export default function (pi: ExtensionAPI) {
 
   /** Compact type list: one line per agent, first sentence only. */
   const buildCompactTypeListText = () =>
-    getAvailableTypes().map((name) => {
-      const cfg = getAgentConfig(name);
+    agentTypes.getAvailableTypes().map((name) => {
+      const cfg = agentTypes.getAgentConfig(name);
       return `- ${name}: ${firstSentence(cfg?.description ?? name)} (Tools: ${formatToolsSuffix(cfg)})`;
     }).join("\n");
 
@@ -1399,9 +1460,9 @@ export default function (pi: ExtensionAPI) {
 
   // Apply persisted settings on startup and emit `subagents:settings_loaded`.
   // Global + project merged; missing → defaults; corrupt file emits a warning
-  // to stderr and falls back to defaults.
-  applyAndEmitLoaded(
-    {
+  // to stderr and falls back to defaults. The appliers are hoisted so
+  // session_start can re-apply them for an adopted cwd (#206).
+  const settingsAppliers: import("./settings.js").SettingsAppliers = {
       setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
       setMaxConcurrentForeground: (n) => manager.setMaxConcurrentForeground(n),
       setDefaultMaxTurns,
@@ -1421,14 +1482,14 @@ export default function (pi: ExtensionAPI) {
       setWorktreeIsolation: setWorktreeIsolationEnabled,
       setWorkflowsEnabled: setWorkflowsEnabled,
       setMaxSubagentDepth: setMaxSubagentDepth,
-      setFallbackSubagent: setFallbackSubagent,
+      setFallbackSubagent: (v) => agentTypes.setFallbackSubagent(v),
       setReportUsage,
       setShowCost,
       setShowModel,
       setViewerMarkdown,
-    },
-    (event, payload) => pi.events.emit(event, payload),
-  );
+    };
+  const emitSettings: import("./settings.js").SettingsEmit = (event, payload) => pi.events.emit(event, payload);
+  applyAndEmitLoaded(settingsAppliers, emitSettings, sessionCwd);
 
   // ---- Agent tool ----
 
@@ -1472,7 +1533,7 @@ export default function (pi: ExtensionAPI) {
   // Compact Agent tool description (#91, `toolDescriptionMode: "compact"`) —
   // the same load-bearing facts as the full version at ~75% fewer tokens, for
   // small/local models. Per-option details live in the param descriptions.
-  const compactAgentToolDescription = `Launch an autonomous agent for complex, multi-step tasks. Agent types:
+  const compactAgentToolDescription = () => `Launch an autonomous agent for complex, multi-step tasks. Agent types:
 ${buildCompactTypeListText()}
 
 Custom agents: .pi/agents/<name>.md (project) or ${getAgentDir()}/agents/<name>.md (global).
@@ -1484,7 +1545,7 @@ Notes:
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
 - resume continues a previous agent by ID; steer_subagent messages a running one.${isolationCompactGuideline}`;
 
-  const fullAgentToolDescription = `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
+  const fullAgentToolDescription = () => `Launch a new agent to handle complex, multi-step tasks autonomously. Each agent type has specific capabilities and tools available to it.
 
 Available agent types and the tools they have access to:
 ${buildTypeListText()}
@@ -1549,7 +1610,7 @@ Terse command-style prompts produce shallow, generic work.
 
   const loadCustomToolDescription = (): string | undefined => {
     for (const path of [
-      join(process.cwd(), ".pi", "agent-tool-description.md"),
+      join(sessionCwd, ".pi", "agent-tool-description.md"),
       join(getAgentDir(), "agent-tool-description.md"),
     ]) {
       try {
@@ -1564,24 +1625,24 @@ Terse command-style prompts produce shallow, generic work.
     return undefined;
   };
 
-  const agentToolDescription = (() => {
+  const buildAgentToolDescription = (): string => (() => {
     const mode = getToolDescriptionMode();
-    if (mode === "compact") return compactAgentToolDescription;
+    if (mode === "compact") return compactAgentToolDescription();
     if (mode === "custom") {
       const custom = loadCustomToolDescription();
       if (custom) return custom;
       console.warn('[pi-subagents] toolDescriptionMode is "custom" but no agent-tool-description.md found — using "full"');
     }
-    return fullAgentToolDescription;
+    return fullAgentToolDescription();
   })();
 
   // Held rather than registered inline: the mention clone reuses this exact
   // definition, so the agent it starts is an ordinary top-level spawn instead
   // of a second implementation that has to be kept in step with this one.
-  const agentTool = defineTool({
+  const buildAgentTool = () => defineTool({
     name: SUBAGENT_TOOL_NAMES.AGENT,
     label: "Agent",
-    description: agentToolDescription,
+    description: buildAgentToolDescription(),
     promptSnippet: "Launch autonomous sub-agents for complex multi-step tasks",
     promptGuidelines: [
       "Use Agent with specialized agents when the task matches an agent type's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing — if you delegate research to a subagent, do not also perform the same searches yourself.",
@@ -1603,7 +1664,7 @@ Terse command-style prompts produce shallow, generic work.
         }),
       ),
       subagent_type: Type.String({
-        description: `The type of specialized agent to use. Available types: ${getAvailableTypes().join(", ")}. Custom agents from .pi/agents/*.md (project) or ${getAgentDir()}/agents/*.md (global) are also available.`,
+        description: `The type of specialized agent to use. Available types: ${agentTypes.getAvailableTypes().join(", ")}. Custom agents from .pi/agents/*.md (project) or ${getAgentDir()}/agents/*.md (global) are also available.`,
       }),
       model: Type.Optional(
         Type.String({
@@ -1657,11 +1718,11 @@ Terse command-style prompts produce shallow, generic work.
       // wraps, so closing here would leave that padding untinted, and HTML export closes
       // any open span per line anyway. No badge means no tint, so an uncolored agent
       // renders exactly the line it always did.
-      const rowBackground = hasAgentBadge(args.subagent_type)
+      const rowBackground = hasAgentBadge(agentTypes.registry(), args.subagent_type)
         ? theme.getBgAnsi(context.isPartial ? "toolPendingBg" : context.isError ? "toolErrorBg" : "toolSuccessBg")
         : "";
       const desc = args.description ?? "";
-      const name = renderAgentName(args.subagent_type, theme, {
+      const name = renderAgentName(agentTypes.registry(), args.subagent_type, theme, {
         fallbackColor: "toolTitle",
         restoreBackground: rowBackground,
         bold: true,
@@ -1777,7 +1838,7 @@ Terse command-style prompts produce shallow, generic work.
       // background or scheduled call can't start running the wrong agent while
       // the caller is still unaware. `fallbackSubagent` decides whether an
       // unresolvable type falls back or fails closed.
-      const dispatch = resolveSpawnType(rawType);
+      const dispatch = agentTypes.resolveSpawnType(rawType);
       // `resume` replays a stored session and ignores `subagent_type` entirely,
       // but the parameter is required by the schema — so gating it here would
       // make a live agent unresumable the moment its type is deleted, disabled,
@@ -1794,13 +1855,13 @@ Terse command-style prompts produce shallow, generic work.
       // session and ignores `subagent_type` entirely, so a note about type
       // substitution would be describing something that didn't happen.
       const fallbackNote = dispatch.ok && dispatch.fellBackFrom !== undefined
-        ? `Note: Unknown agent type "${dispatch.fellBackFrom}" — using ${resolveType(subagentType) ? subagentType : "the fallback agent config"}.\n\n`
+        ? `Note: Unknown agent type "${dispatch.fellBackFrom}" — using ${agentTypes.resolveType(subagentType) ? subagentType : "the fallback agent config"}.\n\n`
         : "";
 
-      const displayName = getDisplayName(subagentType);
+      const displayName = getDisplayName(agentTypes.registry(), subagentType);
 
       // Get agent config (if any)
-      const customConfig = getAgentConfig(subagentType);
+      const customConfig = agentTypes.getAgentConfig(subagentType);
 
       const resolvedConfig = resolveAgentInvocationConfig(customConfig, params, {
         worktreeAllowed: isWorktreeIsolationEnabled(),
@@ -1885,7 +1946,7 @@ Terse command-style prompts produce shallow, generic work.
         isolation,
       };
       // Tool-result render shows the mode label too; viewer's header already does.
-      const modeLabel = getPromptModeLabel(subagentType);
+      const modeLabel = getPromptModeLabel(agentTypes.registry(), subagentType);
       const { tags: invocationTags } = buildInvocationTags(agentInvocation);
       const agentTags = modeLabel ? [modeLabel, ...invocationTags] : invocationTags;
       const detailBase = {
@@ -1913,10 +1974,10 @@ Terse command-style prompts produce shallow, generic work.
         if (!rec?.invocation) return detailBase;
         const type = rec.type;
         const { modelName: recModelName, tags } = buildInvocationTags(rec.invocation);
-        const recModeLabel = getPromptModeLabel(type);
+        const recModeLabel = getPromptModeLabel(agentTypes.registry(), type);
         const recTags = recModeLabel ? [recModeLabel, ...tags] : tags;
         return {
-          displayName: getDisplayName(type),
+          displayName: getDisplayName(agentTypes.registry(), type),
           description: rec.description,
           subagentType: type,
           modelName: recModelName,
@@ -2053,6 +2114,7 @@ Terse command-style prompts produce shallow, generic work.
         // tool call failed only when execute throws, and a returned message
         // reads to the model as a subagent that ran and reported this (#179).
         id = manager.spawn(pi, ctx, subagentType, params.prompt, {
+          registry: agentTypes.registry(),
           description: params.description,
           name: params.name as string | undefined,
           model,
@@ -2207,6 +2269,7 @@ Terse command-style prompts produce shallow, generic work.
       let record: AgentRecord;
       try {
         const fgResult = await manager.spawnAndWait(pi, ctx, subagentType, params.prompt, {
+          registry: agentTypes.registry(),
           description: params.description,
           name: params.name as string | undefined,
           model,
@@ -2296,10 +2359,16 @@ Terse command-style prompts produce shallow, generic work.
     pi.registerTool(withUsageReporting(tool));
   }
 
-  // The mention path is handed THIS object, not the bare `agentTool` — see the
+  // The mention path is handed THIS object, not the bare definition — see the
   // mention-clone header on why the clone must call the registered tool.
-  const registeredAgentTool = withUsageReporting(agentTool);
-  pi.registerTool(registeredAgentTool);
+  // Re-registrable (#206): adopting a session cwd rebuilds the roster this
+  // tool's schema and description embed, so it is reconstructed per call.
+  let registeredAgentTool: ReturnType<typeof buildAgentTool>;
+  const registerAgentTool = (): void => {
+    registeredAgentTool = withUsageReporting(buildAgentTool());
+    pi.registerTool(registeredAgentTool);
+  };
+  registerAgentTool();
 
   // ---- Workflow tool ----
 
@@ -2351,6 +2420,7 @@ Terse command-style prompts produce shallow, generic work.
           pi,
           ctx,
           manager,
+          agentTypes,
           signal: task.abortController.signal,
           rootSessionId: ctx.sessionManager.getSessionId(),
           workflowId: task.id,
@@ -2771,7 +2841,7 @@ Terse command-style prompts produce shallow, generic work.
         if (record.promise) await abortable(record.promise, signal);
       }
 
-      const displayName = getDisplayName(record.type);
+      const displayName = getDisplayName(agentTypes.registry(), record.type);
       const duration = formatDuration(record.startedAt, record.completedAt);
       const tokens = formatLifetimeTokens(record);
       const contextPercent = getSessionContextPercent(record.session);
@@ -2880,7 +2950,7 @@ Terse command-style prompts produce shallow, generic work.
   // through `registerCommand`, which every test mocks.
 
   function getModelLabel(type: string, registry?: ModelRegistry): string {
-    const cfg = getAgentConfig(type);
+    const cfg = agentTypes.getAgentConfig(type);
     if (!cfg?.model) return "inherit"; // no model configured → really inherits parent
     const label = getModelLabelFromConfig(cfg.model);
     if (!registry) return label;
@@ -2899,7 +2969,7 @@ Terse command-style prompts produce shallow, generic work.
 
   async function showAgentsMenu(ctx: ExtensionCommandContext) {
     reloadCustomAgents();
-    const allNames = getAllTypes();
+    const allNames = agentTypes.getAllTypes();
 
     // Build select options
     const options: string[] = [];
@@ -2967,7 +3037,7 @@ Terse command-style prompts produce shallow, generic work.
   }
 
   async function showAllAgentsList(ctx: ExtensionCommandContext) {
-    const allNames = getAllTypes();
+    const allNames = agentTypes.getAllTypes();
     if (allNames.length === 0) {
       ctx.ui.notify("No agents.", "info");
       return;
@@ -2987,7 +3057,7 @@ Terse command-style prompts produce shallow, generic work.
     // full description renders below the highlighted row via SettingsList,
     // exactly like the Settings menu — so long descriptions never wrap the list.
     const items: SettingItem[] = allNames.map(name => {
-      const cfg = getAgentConfig(name);
+      const cfg = agentTypes.getAgentConfig(name);
       const disabled = cfg?.enabled === false;
       const model = getModelLabel(name, ctx.modelRegistry);
       return {
@@ -3001,8 +3071,8 @@ Terse command-style prompts produce shallow, generic work.
       };
     });
 
-    const hasCustom = allNames.some(n => { const c = getAgentConfig(n); return c && !c.isDefault && c.enabled !== false; });
-    const hasDisabled = allNames.some(n => getAgentConfig(n)?.enabled === false);
+    const hasCustom = allNames.some(n => { const c = agentTypes.getAgentConfig(n); return c && !c.isDefault && c.enabled !== false; });
+    const hasDisabled = allNames.some(n => agentTypes.getAgentConfig(n)?.enabled === false);
     const legendParts: string[] = [];
     if (hasCustom) legendParts.push("• = project  ◦ = global");
     if (hasDisabled) legendParts.push("✕ = disabled");
@@ -3028,7 +3098,7 @@ Terse command-style prompts produce shallow, generic work.
       };
     });
 
-    if (selected && getAgentConfig(selected)) {
+    if (selected && agentTypes.getAgentConfig(selected)) {
       await showAgentDetail(ctx, selected);
       await showAllAgentsList(ctx);
     }
@@ -3045,7 +3115,7 @@ Terse command-style prompts produce shallow, generic work.
     // same description render identically here, and resolving the choice by
     // string match would open whichever came first.
     const record = await selectItem(ctx.ui, "Running agents", agents, a => {
-      const dn = getDisplayName(a.type);
+      const dn = getDisplayName(agentTypes.registry(), a.type);
       const dur = formatDuration(a.startedAt, a.completedAt);
       return `${dn} (${a.description}) · ${a.toolUses} tools · ${a.status} · ${dur}`;
     });
@@ -3068,7 +3138,7 @@ Terse command-style prompts produce shallow, generic work.
 
     await ctx.ui.custom<undefined>(
       (tui, theme, keybindings, done) => {
-        return new ConversationViewer(tui, session, record, activity, theme, done, () => {
+        return new ConversationViewer(tui, session, record, agentTypes.registry(), activity, theme, done, () => {
           if (manager.abort(record.id)) {
             ctx.ui.notify(`Stopped "${record.description}".`, "info");
           }
@@ -3082,7 +3152,7 @@ Terse command-style prompts produce shallow, generic work.
   }
 
   async function showAgentDetail(ctx: ExtensionCommandContext, name: string) {
-    const cfg = getAgentConfig(name);
+    const cfg = agentTypes.getAgentConfig(name);
     if (!cfg) {
       ctx.ui.notify(`Agent config not found for "${name}".`, "warning");
       return;
@@ -3173,7 +3243,7 @@ Terse command-style prompts produce shallow, generic work.
 
   /** Disable an agent: set enabled: false in its .md file, or create a stub for built-in defaults. */
   async function disableAgent(ctx: ExtensionCommandContext, name: string) {
-    const file = locateAgentFile(name, getAgentConfig(name)?.sourcePath);
+    const file = locateAgentFile(name, agentTypes.getAgentConfig(name)?.sourcePath);
     if (file) {
       // Existing file — set enabled: false in frontmatter (idempotent)
       const content = readFileSync(file.path, "utf-8");
@@ -3214,7 +3284,7 @@ Terse command-style prompts produce shallow, generic work.
 
   /** Enable a disabled agent by removing enabled: false from its frontmatter. */
   async function enableAgent(ctx: ExtensionCommandContext, name: string) {
-    const file = locateAgentFile(name, getAgentConfig(name)?.sourcePath);
+    const file = locateAgentFile(name, agentTypes.getAgentConfig(name)?.sourcePath);
     if (!file) return;
 
     const content = readFileSync(file.path, "utf-8");
@@ -3327,6 +3397,7 @@ Guidelines for choosing settings:
 Write the file using the write tool. Only write the file, nothing else.`;
 
     const { record } = await manager.spawnAndWait(pi, ctx, "general-purpose", generatePrompt, {
+      registry: agentTypes.registry(),
       description: `Generate ${name} agent`,
       maxTurns: 5,
       // Exempt from maxConcurrentForeground. This runs from a modal wizard, not
@@ -3449,7 +3520,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
       schedulingEnabled: isSchedulingEnabled(),
       scopeModels: isScopeModelsEnabled(),
       strictAgentFiles,
-      disableDefaultAgents: isDefaultsDisabled(),
+      disableDefaultAgents: agentTypes.isDefaultsDisabled(),
       toolDescriptionMode: getToolDescriptionMode(),
       fleetView: isFleetViewEnabled(),
       agentMentions: getAgentMentionMode(),
@@ -3470,7 +3541,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
       // whole snapshot, and materializing the implicit default would turn it into
       // explicit configuration — which then fails loudly if general-purpose later
       // goes away. undefined is dropped by JSON.stringify.
-      fallbackSubagent: getFallbackSubagent(),
+      fallbackSubagent: agentTypes.getFallbackSubagent(),
       reportUsage: isReportUsageEnabled(),
       showCost: isShowCostEnabled(),
       showModel: isShowModelEnabled(),
@@ -3505,8 +3576,8 @@ Write the file using the write tool. Only write the file, nothing else.`;
       // there would advertise strict dispatch for the most permissive state.
       // `values` still offers only resolvable targets, so the user cannot
       // persist a fallback that would hard-error on every dispatch.
-      const fallbackValue = getFallbackSubagent() ?? "general-purpose";
-      const fallbackValues = [...new Set([...getAvailableTypes(), NO_FALLBACK])];
+      const fallbackValue = agentTypes.getFallbackSubagent() ?? "general-purpose";
+      const fallbackValues = [...new Set([...agentTypes.getAvailableTypes(), NO_FALLBACK])];
 
       return [
         {
@@ -3592,7 +3663,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
           id: "disableDefaultAgents",
           label: "Disable defaults",
           description: "Hide built-in agents (general-purpose, Explore, Plan) — custom agents are unaffected",
-          currentValue: isDefaultsDisabled() ? "on" : "off",
+          currentValue: agentTypes.isDefaultsDisabled() ? "on" : "off",
           values: ["on", "off"],
         },
         {
@@ -3780,7 +3851,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
         setDisableDefaultAgents(enabled);
         notifyApplied(ctx, `Default agents ${enabled ? "disabled" : "enabled"}. Tool spec change takes effect on next pi session.`);
       } else if (id === "fallbackSubagent") {
-        setFallbackSubagent(value);
+        agentTypes.setFallbackSubagent(value);
         notifyApplied(
           ctx,
           value === NO_FALLBACK
@@ -3949,6 +4020,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
       snapshotSettings(),
       changeMsg,
       (event, payload) => pi.events.emit(event, payload),
+      sessionCwd,
     );
     // `ctx` is absent only on the fleet path between sessions, where
     // `currentCtx` has been cleared and there is no UI to carry the warning to.
@@ -3961,6 +4033,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
       snapshotSettings(),
       successMsg,
       (event, payload) => pi.events.emit(event, payload),
+      sessionCwd,
     );
     ctx.ui.notify(message, level);
   }

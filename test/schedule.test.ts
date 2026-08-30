@@ -14,9 +14,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
+import { createAgentTypeState, NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
 import { SubagentScheduler } from "../src/schedule.js";
 import { ScheduleStore } from "../src/schedule-store.js";
+
+function scheduleState() {
+  const state = createAgentTypeState();
+  state.register(new Map());
+  return state;
+}
 
 function makeMockManager() {
   const spawnFn = vi.fn(() => "agent-" + Math.random().toString(36).slice(2, 10));
@@ -108,7 +114,7 @@ describe("SubagentScheduler — lifecycle", () => {
     manager = makeMockManager();
     pi = makeMockPi();
     ctx = makeMockCtx();
-    scheduler.start(pi, ctx, manager, store);
+    scheduler.start(pi, ctx, manager, store, scheduleState());
   });
 
   afterEach(() => {
@@ -217,7 +223,7 @@ describe("SubagentScheduler — lifecycle", () => {
     // Re-arm: stop drops timers, start re-reads store.list() and calls scheduleJob
     // for every enabled job → the past-branch fires for our seeded record.
     scheduler.stop();
-    scheduler.start(pi, ctx, manager, store);
+    scheduler.start(pi, ctx, manager, store, scheduleState());
 
     const reloaded = scheduler.list().find(j => j.id === "reload-test");
     expect(reloaded?.enabled).toBe(false);
@@ -244,7 +250,7 @@ describe("SubagentScheduler — fire path", () => {
     manager = makeMockManager();
     pi = makeMockPi();
     ctx = makeMockCtx();
-    scheduler.start(pi, ctx, manager, store);
+    scheduler.start(pi, ctx, manager, store, scheduleState());
   });
 
   afterEach(() => {
@@ -272,9 +278,15 @@ describe("SubagentScheduler — fire path", () => {
 
   it("refuses at fire time when the job's agent type no longer resolves", () => {
     // The registry is what production populates at activation; a job outliving
-    // its agent must not silently run something else (#183).
-    registerAgents(new Map());
-    setFallbackSubagent(NO_FALLBACK);
+    // its agent must not silently run something else (#183). Rebind the
+    // scheduler to a fail-closed state: defaults off, no fallback (#206 makes
+    // this per-session rather than module-global).
+    scheduler.stop();
+    const failClosed = createAgentTypeState();
+    failClosed.setDefaultsDisabled(true);
+    failClosed.setFallbackSubagent(NO_FALLBACK);
+    failClosed.register(new Map());
+    scheduler.start(pi, ctx, manager, store, failClosed);
     const job = scheduler.addJob({
       name: "gone", description: "vanished agent", schedule: "+1s",
       subagent_type: "deleted-since", prompt: "run",

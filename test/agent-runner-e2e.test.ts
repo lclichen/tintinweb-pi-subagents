@@ -29,7 +29,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extensionCanonicalName, runAgent } from "../src/agent-runner.js";
-import { registerAgents } from "../src/agent-types.js";
+import { moduleDefaultRegistry, registerAgents } from "../src/agent-types.js";
 import type { AgentConfig } from "../src/types.js";
 import { registerFauxProvider } from "./helpers/pi-ai.js";
 
@@ -104,6 +104,7 @@ describe("agent-runner end-to-end (real pi-mono session + real extension)", () =
     let active: string[] = [];
     try {
       await runAgent(ctx, "e2e", "go", {
+        registry: moduleDefaultRegistry(),
         pi: makePi(),
         model,
         onSessionCreated: (s) => {

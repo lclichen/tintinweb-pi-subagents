@@ -91,6 +91,7 @@ describe("AgentWidget", () => {
     const widget = new AgentWidget(
       manager as any,
       new Map([[activityId, makeActivity()]]),
+      new Map(),
       mode,
       () => false,
       () => showModel,
@@ -203,6 +204,7 @@ describe("AgentWidget", () => {
     const widget = new AgentWidget(
       { listAgents: () => records } as any,
       new Map(),
+      new Map(),
       () => "background",
       () => false,
       () => true,
@@ -296,6 +298,7 @@ describe("AgentWidget cost display", () => {
     const widget = new AgentWidget(
       { listAgents: () => [agent] } as any,
       activity,
+      new Map(),
       () => "all",
       () => showCost,
     );
@@ -334,7 +337,7 @@ describe("AgentWidget cost display", () => {
       compactionCount: 0,
     };
     const widget = new AgentWidget(
-      { listAgents: () => [finished] } as any, new Map(), () => "all", () => true,
+      { listAgents: () => [finished] } as any, new Map(), new Map(), () => "all", () => true,
     );
     let factory: any;
     widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
@@ -355,7 +358,7 @@ describe("AgentWidget cost display", () => {
       compactionCount: 0,
     };
     const widget = new AgentWidget(
-      { listAgents: () => [running] } as any, new Map(), () => "all", () => true,
+      { listAgents: () => [running] } as any, new Map(), new Map(), () => "all", () => true,
     );
     let factory: any;
     widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
@@ -375,7 +378,7 @@ describe("AgentWidget cost display", () => {
     const activity = new Map([["a1", {
       activeTools: new Map(), toolUses: 0, responseText: "", turnCount: 1,
     } as AgentActivity]]);
-    const widget = new AgentWidget({ listAgents: () => [agent] } as any, activity, () => "all");
+    const widget = new AgentWidget({ listAgents: () => [agent] } as any, activity, new Map(), () => "all");
     let factory: any;
     widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
     widget.update();
@@ -415,7 +418,7 @@ describe("AgentWidget overflow accounting", () => {
       responseText: "",
       turnCount: 1,
     } as AgentActivity]));
-    const widget = new AgentWidget({ listAgents: () => agents } as any, activity, () => "all");
+    const widget = new AgentWidget({ listAgents: () => agents } as any, activity, new Map(), () => "all");
     let factory: any;
     widget.setUICtx({ setStatus: () => {}, setWidget: (_k, c) => { factory = c; } } as any);
     widget.update();
@@ -501,7 +504,7 @@ describe("AgentWidget overflow accounting", () => {
       responseText: "",
       turnCount: 1,
     } as AgentActivity]]);
-    const widget = new AgentWidget({ listAgents: () => [agent] } as any, activity, () => "all");
+    const widget = new AgentWidget({ listAgents: () => [agent] } as any, activity, new Map(), () => "all");
     let factory: any;
     widget.setUICtx({ setStatus: () => {}, setWidget: (_k: any, c: any) => { factory = c; } } as any);
     const render = () => {

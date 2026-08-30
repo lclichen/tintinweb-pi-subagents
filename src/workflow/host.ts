@@ -35,7 +35,7 @@
 import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AgentManager } from "../agent-manager.js";
-import { getAgentConfig, resolveSpawnType } from "../agent-types.js";
+import type { AgentTypeState } from "../agent-types.js";
 import { resolveModel } from "../model-resolver.js";
 import { checkModelScope } from "../model-scope.js";
 import type { AgentRecord, ThinkingLevel } from "../types.js";
@@ -54,6 +54,8 @@ export interface WorkflowHostOptions {
   pi: ExtensionAPI;
   ctx: ExtensionContext;
   manager: AgentManager;
+  /** The session's agent-type state — workflow children resolve through it (#206). */
+  agentTypes: AgentTypeState;
   /** The run's abort signal, so killing the workflow kills its children. */
   signal?: AbortSignal;
   /** Groups child transcripts under the parent session. */
@@ -194,7 +196,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
 
   return {
     async spawnAgent(request) {
-      const dispatch = resolveSpawnType(request.agentType);
+      const dispatch = deps.agentTypes.resolveSpawnType(request.agentType);
       if (!dispatch.ok) return { ok: false, error: dispatch.message };
 
       // Same precedence as the Agent tool: the caller's model wins, the agent
@@ -202,7 +204,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       // named and we cannot resolve is an error; one the definition named falls
       // back to the parent silently, because the script never asked for it.
       let model = ctx.model;
-      const config = getAgentConfig(dispatch.type);
+      const config = deps.agentTypes.getAgentConfig(dispatch.type);
       const modelInput = request.model ?? config?.model;
       if (modelInput !== undefined) {
         const resolved = resolveModel(modelInput, ctx.modelRegistry);
@@ -297,6 +299,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
           dispatch.type,
           request.prompt,
           {
+            registry: deps.agentTypes.registry(),
             description: request.label,
             // The stamp is what keeps this child out of the session's
             // `maxConcurrent` pool — see `occupiesPoolSlot`. The run already

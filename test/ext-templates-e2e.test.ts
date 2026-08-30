@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAgent } from "../src/agent-runner.js";
-import { getAgentConfig, registerAgents } from "../src/agent-types.js";
+import { getAgentConfig, moduleDefaultRegistry, registerAgents } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 import { resolveAgentInvocationConfig } from "../src/invocation-config.js";
 import { registerFauxProvider } from "./helpers/pi-ai.js";
@@ -125,6 +125,9 @@ describe("ext: / tools: scoping — template-driven e2e (real pi-mono, headless)
     try {
       await runAgent(ctx, agentName, "go", {
         pi,
+        // #206: the run resolves its type through the caller's registry; tests
+        // drive the module-default one the fixtures were registered into.
+        registry: moduleDefaultRegistry(),
         model,
         cwd: FIXTURES_DIR,
         isolated: resolved.isolated,

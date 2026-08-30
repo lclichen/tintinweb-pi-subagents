@@ -103,7 +103,7 @@ describe("ConversationViewer invocation line", () => {
   /** The `↳` metadata row for a record, or "" when the viewer renders none. */
   function invocationLine(invocation: AgentRecord["invocation"]): string {
     const viewer = new ConversationViewer(
-      mockTui(30, 200), mockSession([]), mockRecord({ invocation }), undefined,
+      mockTui(30, 200), mockSession([]), mockRecord({ invocation }), new Map(), undefined,
       { fg: (_c: string, t: string) => t, bold: (t: string) => t } as any,
       vi.fn(),
     );
@@ -151,7 +151,7 @@ describe("ConversationViewer cost display", () => {
       lifetimeUsage: { input: 1000, output: 200, cacheWrite: 0, cost },
     } as Partial<AgentRecord>);
     const viewer = new ConversationViewer(
-      mockTui(30, 200), mockSession([]), record, undefined,
+      mockTui(30, 200), mockSession([]), record, new Map(), undefined,
       { fg: (_c: string, t: string) => t, bold: (t: string) => t } as any,
       vi.fn(), undefined, undefined, undefined, on,
     );
@@ -181,7 +181,7 @@ describe("ConversationViewer", () => {
   it("closes with Ctrl+C when not composing", () => {
     const done = vi.fn();
     const viewer = new ConversationViewer(
-      mockTui(), mockSession(), mockRecord(), undefined, ansiTheme(), done,
+      mockTui(), mockSession(), mockRecord(), new Map(), undefined, ansiTheme(), done,
     );
 
     viewer.handleInput("\x03");
@@ -196,7 +196,7 @@ describe("ConversationViewer", () => {
     it("no line exceeds width with empty messages", () => {
       for (const w of widths) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession([]), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession([]), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -209,7 +209,7 @@ describe("ConversationViewer", () => {
       ];
       for (const w of widths) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -221,7 +221,7 @@ describe("ConversationViewer", () => {
         const viewer = new ConversationViewer(
           mockTui(30, width),
           mockSession([]),
-          mockRecord({ description: `${"a".repeat(prefixLength)}界more` }),
+          mockRecord({ description: `${"a".repeat(prefixLength)}界more` }), new Map(),
           undefined,
           ansiTheme(),
           vi.fn(),
@@ -245,7 +245,7 @@ describe("ConversationViewer", () => {
       ];
       for (const w of widths) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -258,7 +258,7 @@ describe("ConversationViewer", () => {
       ];
       for (const w of widths) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -271,7 +271,7 @@ describe("ConversationViewer", () => {
       ];
       for (const w of widths) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -286,7 +286,7 @@ describe("ConversationViewer", () => {
       ];
       for (const w of widths) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -302,7 +302,7 @@ describe("ConversationViewer", () => {
       ];
       for (const w of widths) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -320,7 +320,7 @@ describe("ConversationViewer", () => {
       ];
       for (const w of widths) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(messages), mockRecord({ status: "running" }), activity as any, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(messages), mockRecord({ status: "running" }), new Map(), activity as any, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -338,7 +338,7 @@ describe("ConversationViewer", () => {
       ];
       for (const w of widths) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -351,7 +351,7 @@ describe("ConversationViewer", () => {
       ];
       for (const w of [8, 10, 15, 20]) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -364,7 +364,7 @@ describe("ConversationViewer", () => {
       ];
       for (const w of widths) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         assertAllLinesFit(viewer.render(w), w);
       }
@@ -383,7 +383,7 @@ describe("ConversationViewer", () => {
       rows = 200,
     ) {
       return new ConversationViewer(
-        mockTui(rows, 80), mockSession(messages), mockRecord({ status: "completed" }), undefined,
+        mockTui(rows, 80), mockSession(messages), mockRecord({ status: "completed" }), new Map(), undefined,
         ansiTheme(), vi.fn(), undefined, undefined, undefined, false,
         mode ? () => mode : undefined, onMode,
       );
@@ -473,7 +473,7 @@ describe("ConversationViewer", () => {
     it("`m` disarms a pending stop rather than confirming it", () => {
       const onStop = vi.fn();
       const viewer = new ConversationViewer(
-        mockTui(200, 80), mockSession(assistant("hi")), mockRecord({ status: "running" }), undefined,
+        mockTui(200, 80), mockSession(assistant("hi")), mockRecord({ status: "running" }), new Map(), undefined,
         ansiTheme(), vi.fn(), onStop,
       );
 
@@ -486,7 +486,7 @@ describe("ConversationViewer", () => {
 
     it("keeps the footer's navigation hints intact at 80 columns", () => {
       const viewer = new ConversationViewer(
-        mockTui(200, 80), mockSession(assistant("hi")), mockRecord({ status: "running" }), undefined,
+        mockTui(200, 80), mockSession(assistant("hi")), mockRecord({ status: "running" }), new Map(), undefined,
         ansiTheme(), vi.fn(), vi.fn(), undefined, vi.fn(),
       );
       const lines = viewer.render(80);
@@ -663,7 +663,7 @@ describe("ConversationViewer", () => {
       // Narrower widths stay covered by the wrapTextWithAnsi safety net above.
       for (const w of [20, 40, 80, 120]) {
         const viewer = new ConversationViewer(
-          mockTui(30, w), mockSession(assistant(text)), mockRecord(), undefined, ansiTheme(), vi.fn(),
+          mockTui(30, w), mockSession(assistant(text)), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
         );
         const content = (viewer as any).buildContentLines(w) as string[];
 
@@ -701,7 +701,7 @@ describe("ConversationViewer", () => {
         { role: "toolResult", toolUseId: "t1", content: [{ type: "text", text: "output" }] },
       ];
       const viewer = new ConversationViewer(
-        mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+        mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
       );
       assertAllLinesFit(callBuildContentLines(viewer, w), w);
     });
@@ -712,7 +712,7 @@ describe("ConversationViewer", () => {
 
       const messages = [{ role: "user", content: "hello" }];
       const viewer = new ConversationViewer(
-        mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+        mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
       );
       assertAllLinesFit(callBuildContentLines(viewer, w), w);
     });
@@ -725,7 +725,7 @@ describe("ConversationViewer", () => {
         { role: "assistant", content: [{ type: "text", text: "response" }] },
       ];
       const viewer = new ConversationViewer(
-        mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+        mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
       );
       assertAllLinesFit(callBuildContentLines(viewer, w), w);
     });
@@ -741,7 +741,7 @@ describe("ConversationViewer", () => {
         },
       ];
       const viewer = new ConversationViewer(
-        mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+        mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
       );
       assertAllLinesFit(callBuildContentLines(viewer, w), w);
     });
@@ -754,7 +754,7 @@ describe("ConversationViewer", () => {
         { role: "toolResult", toolUseId: "t1", content: [{ type: "text", text: "output" }] },
       ];
       const viewer = new ConversationViewer(
-        mockTui(30, w), mockSession(messages), mockRecord(), undefined, ansiTheme(), vi.fn(),
+        mockTui(30, w), mockSession(messages), mockRecord(), new Map(), undefined, ansiTheme(), vi.fn(),
       );
       assertAllLinesFit(callBuildContentLines(viewer, w), w);
     });
@@ -767,7 +767,7 @@ describe("ConversationViewer", () => {
       const onStop = vi.fn();
       const tui = mockTui(30, W);
       const viewer = new ConversationViewer(
-        tui, mockSession(), mockRecord({ status: "running" }), undefined, ansiTheme(), vi.fn(), onStop,
+        tui, mockSession(), mockRecord({ status: "running" }), new Map(), undefined, ansiTheme(), vi.fn(), onStop,
       );
 
       // Idle footer offers the stop affordance.
@@ -787,7 +787,7 @@ describe("ConversationViewer", () => {
     it("any other key disarms the confirm", () => {
       const onStop = vi.fn();
       const viewer = new ConversationViewer(
-        mockTui(30, W), mockSession(), mockRecord({ status: "running" }), undefined, ansiTheme(), vi.fn(), onStop,
+        mockTui(30, W), mockSession(), mockRecord({ status: "running" }), new Map(), undefined, ansiTheme(), vi.fn(), onStop,
       );
 
       viewer.handleInput("x");                       // arm
@@ -802,7 +802,7 @@ describe("ConversationViewer", () => {
     it("does not offer or perform stop once the agent is no longer running", () => {
       const onStop = vi.fn();
       const viewer = new ConversationViewer(
-        mockTui(30, W), mockSession(), mockRecord({ status: "completed" }), undefined, ansiTheme(), vi.fn(), onStop,
+        mockTui(30, W), mockSession(), mockRecord({ status: "completed" }), new Map(), undefined, ansiTheme(), vi.fn(), onStop,
       );
 
       expect(viewer.render(W).join("\n")).not.toContain("x stop");
@@ -813,7 +813,7 @@ describe("ConversationViewer", () => {
 
     it("no stop affordance when no onStop handler is provided (read-only history)", () => {
       const viewer = new ConversationViewer(
-        mockTui(30, W), mockSession(), mockRecord({ status: "running" }), undefined, ansiTheme(), vi.fn(),
+        mockTui(30, W), mockSession(), mockRecord({ status: "running" }), new Map(), undefined, ansiTheme(), vi.fn(),
       );
       expect(viewer.render(W).join("\n")).not.toContain("x stop");
       expect(() => { viewer.handleInput("x"); viewer.handleInput("x"); }).not.toThrow();
@@ -827,7 +827,7 @@ describe("ConversationViewer", () => {
       const onSteer = opts.onSteer ?? vi.fn();
       const tui = mockTui(30, W);
       const viewer = new ConversationViewer(
-        tui, mockSession(), mockRecord({ status: opts.status ?? "running" }),
+        tui, mockSession(), mockRecord({ status: opts.status ?? "running" }), new Map(),
         undefined, ansiTheme(), vi.fn(), undefined, undefined, onSteer,
       );
       return { viewer, tui, onSteer };
@@ -890,7 +890,7 @@ describe("ConversationViewer", () => {
 
     it("no steer affordance when no onSteer handler is provided", () => {
       const viewer = new ConversationViewer(
-        mockTui(30, W), mockSession(), mockRecord({ status: "running" }), undefined, ansiTheme(), vi.fn(),
+        mockTui(30, W), mockSession(), mockRecord({ status: "running" }), new Map(), undefined, ansiTheme(), vi.fn(),
       );
       expect(viewer.render(W).join("\n")).not.toContain("Enter steer");
       expect(() => viewer.handleInput("\r")).not.toThrow();
@@ -900,7 +900,7 @@ describe("ConversationViewer", () => {
       for (const w of [40, 80, 120]) {
         const tui = mockTui(30, w);
         const viewer = new ConversationViewer(
-          tui, mockSession(), mockRecord({ status: "running" }),
+          tui, mockSession(), mockRecord({ status: "running" }), new Map(),
           undefined, ansiTheme(), vi.fn(), undefined, undefined, vi.fn(),
         );
         viewer.handleInput("\r"); // open composer

@@ -21,6 +21,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import { getAllTypes, getAvailableTypes, NO_FALLBACK, registerAgents, setFallbackSubagent } from "../src/agent-types.js";
+import { loadCustomAgents } from "../src/custom-agents.js";
 import subagentsExtension from "../src/index.js";
 
 function makePi() {
@@ -84,6 +85,10 @@ describe("fallbackSubagent gates dispatch through the real Agent tool", () => {
     process.env.PI_CODING_AGENT_DIR = join(cwd, "agent-dir");
     process.env.HOME = cwd;
     vi.mocked(runAgent).mockReset();
+    // #206: the extension resolves through its per-session registry; the
+    // module-level getAllTypes/getAvailableTypes pins below need the same
+    // fixture seeded explicitly.
+    registerAgents(loadCustomAgents(cwd, false));
   });
 
   afterEach(() => {
