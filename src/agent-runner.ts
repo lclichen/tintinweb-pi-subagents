@@ -27,6 +27,7 @@ import { buildMemoryBlock, buildReadOnlyMemoryBlock } from "./memory.js";
 import { createNestedSubagentTools, getMaxSubagentDepth, type NestedAgentManager } from "./nested-tools.js";
 import { buildAgentPrompt, type PromptExtras } from "./prompts.js";
 import { preloadSkills } from "./skill-loader.js";
+import { createSubagentUIContext } from "./subagent-ui.js";
 import { createStructuredCapture, createStructuredOutputTool, structuredRetryPrompt } from "./structured-output.js";
 import type { AgentConfig, SubagentType, ThinkingLevel } from "./types.js";
 import type { LifetimeUsage } from "./usage.js";
@@ -1039,7 +1040,16 @@ export async function runAgent(
   // (e.g. loading credentials, setting up state). Tool gating already happened
   // at session construction via the `tools:` allowlist above — no separate
   // post-bind filter is needed. All ExtensionBindings fields are optional.
+  //
+  // UI relay: when the spawning session has an interactive UI, hand the child
+  // a prefixed view of it so ask-user-question dialogs reach the human instead
+  // of the SDK's silent no-op declines. Headless parents (bench, print mode)
+  // keep the no-op — the child prompt covers that case with assumptions +
+  // report-back guidance. Mirroring ctx.mode keeps extensions that branch on
+  // it (setWidget render paths) behaving like the host they now talk to.
+  const childUI = ctx.hasUI && ctx.ui ? createSubagentUIContext(ctx.ui, config.name) : undefined;
   await session.bindExtensions({
+    ...(childUI ? { uiContext: childUI, mode: ctx.mode } : {}),
     onError: (err) => {
       options.onToolActivity?.({
         type: "end",

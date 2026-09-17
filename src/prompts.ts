@@ -86,6 +86,15 @@ Return only the answer, in exactly the shape the prompt asks for — no preamble
 </workflow_child>`
     : "";
 
+  // User-interaction contract for every child: dialogs are relayed through
+  // the parent's UI when interactive (subagent-ui.ts) or decline honestly
+  // otherwise — either way the child never blocks on a human.
+  const userInteractionBlock = `\n\n<user_interaction>
+You run as a sub-agent. Questions you ask the user (select/confirm/input dialogs) are relayed through the parent session when it has an interactive UI; otherwise they auto-decline without a human ever seeing them. Never wait for or depend on user input:
+- If a dialog declines or returns nothing, do NOT retry it — proceed with the most reasonable assumption and state that assumption explicitly.
+- If a decision truly blocks the task, finish with a "## Questions" section listing what the parent agent or the user must answer.
+</user_interaction>`;
+
   // Build optional extras suffix
   const extraSections: string[] = [];
   if (extras?.memoryBlock) {
@@ -123,7 +132,7 @@ You are operating as a sub-agent invoked to handle a specific task.
     // placed verbatim (no wrapper tag) so it forms an identical byte prefix
     // with the parent session, maximising KV cache hits. The <active_agent>
     // tag and env block vary per call and are placed after the cached prefix.
-    return identity + "\n\n" + bridge + "\n\n" + activeAgentTag + envBlock + worktreeBlock + workflowBlock + customSection + extrasSuffix;
+    return identity + "\n\n" + bridge + "\n\n" + activeAgentTag + envBlock + worktreeBlock + workflowBlock + userInteractionBlock + customSection + extrasSuffix;
   }
 
   // "replace" mode — env header + the config's full system prompt
@@ -132,7 +141,7 @@ You have been invoked to handle a specific task autonomously.
 
 ${envBlock}`;
 
-  return activeAgentTag + replaceHeader + worktreeBlock + workflowBlock + "\n\n" + config.systemPrompt + extrasSuffix;
+  return activeAgentTag + replaceHeader + worktreeBlock + workflowBlock + userInteractionBlock + "\n\n" + config.systemPrompt + extrasSuffix;
 }
 
 /** Fallback base prompt when parent system prompt is unavailable in append mode. */

@@ -487,3 +487,19 @@ describe("buildAgentPrompt", () => {
     });
   });
 });
+
+describe("user-interaction contract block", () => {
+  it("append mode includes the no-blocking guidance", () => {
+    const config = getDefaultConfig("general-purpose"); // append mode by default
+    const prompt = buildAgentPrompt(config, "/workspace", env, "PARENT PROMPT");
+    expect(prompt).toContain("<user_interaction>");
+    expect(prompt).toContain("Never wait for or depend on user input");
+    expect(prompt).toContain('## Questions');
+  });
+
+  it("replace mode includes the same block", () => {
+    const config = { ...getDefaultConfig("general-purpose"), promptMode: "replace" as const };
+    const prompt = buildAgentPrompt(config, "/workspace", env);
+    expect(prompt).toContain("<user_interaction>");
+  });
+});
