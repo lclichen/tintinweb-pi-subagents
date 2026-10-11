@@ -978,7 +978,22 @@ export async function runAgent(
 
   const settingsManager = SettingsManager.create(configCwd, agentDir);
   const configuredSessionDir = resolveConfiguredSessionDir(agentConfig?.sessionDir, effectiveCwd);
-  const defaultSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR ?? settingsManager.getSessionDir?.();
+  // Multi-space hosts (pi-web) run parent sessions in per-user shard
+  // directories. A subagent spawned from a shard parent must persist into the
+  // SAME shard — the global default (`settingsManager.getSessionDir()`) puts
+  // the child in the host space, where the parent's user can never open it
+  // (404 behind the space fence) and the session list shows it as a foreign
+  // fork. Derive the directory from the parent's own session file: explicit
+  // env/config still wins (they are the deliberate override paths).
+  const parentSessionDir = (() => {
+    const parentFile = ctx.sessionManager?.getSessionFile?.();
+    if (!parentFile) return undefined;
+    return dirname(parentFile);
+  })();
+  const defaultSessionDir =
+    process.env.PI_CODING_AGENT_SESSION_DIR
+    ?? parentSessionDir
+    ?? settingsManager.getSessionDir?.();
   // Frontmatter wins when it says anything; otherwise the project default,
   // which `rememberAgents` supplies for top-level agents only. Same precedence
   // as `outputTranscript`.

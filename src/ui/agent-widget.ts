@@ -87,6 +87,13 @@ export interface AgentDetails {
   cost?: number;
   agentId?: string;
   error?: string;
+  /**
+   * The subagent's own session id — present when the run persists a session
+   * file. pi-web's Agent-tool card uses it to open the child session as a
+   * read-only viewer tab (running or finished); without it the card falls
+   * back to the result summary only.
+   */
+  sessionId?: string;
 }
 
 // ---- Formatting helpers ----

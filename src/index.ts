@@ -219,6 +219,10 @@ function buildDetails(
     durationMs: (record.completedAt ?? Date.now()) - record.startedAt,
     status: record.status as AgentDetails["status"],
     agentId: record.id,
+    // The child's own session id — pi-web's Agent-tool card opens a read-only
+    // viewer tab with it (running or finished). Present only when the run
+    // persists a session file (in-memory runs leave it undefined).
+    sessionId: record.session?.getSessionId?.(),
     error: record.error,
     ...overrides,
   };
