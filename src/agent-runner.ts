@@ -764,12 +764,35 @@ export async function runAgent(
           };
         };
 
+  // Host bridge: pi-web registers a per-process hook so a subagent spawned by
+  // a pi-web RPC parent inherits the parent's INLINE session extensions
+  // (local-machine relay tools, ssh tools, environment info, remote-verify).
+  // Without them the child's coding tools run on the pi-web server host —
+  // invisible breakage that only shows up as wrong paths in child output.
+  // Absent hook (plain CLI, or a grandchild whose parent is itself a
+  // subagent) leaves behavior unchanged.
+  const hostChildExtensions = (() => {
+    const hook = (globalThis as {
+      __piWebChildExtensions?: (parentSessionId: string) => unknown[] | undefined;
+    }).__piWebChildExtensions;
+    if (typeof hook !== "function") return undefined;
+    const parentId = ctx.sessionManager?.getSessionId?.();
+    if (!parentId) return undefined;
+    try {
+      const factories = hook(parentId);
+      return Array.isArray(factories) && factories.length > 0 ? factories : undefined;
+    } catch {
+      return undefined; // a broken host bridge must never break the spawn
+    }
+  })();
+
   const loader = new DefaultResourceLoader({
     cwd: configCwd,
     agentDir,
     noExtensions,
     additionalExtensionPaths,
     extensionsOverride,
+    ...(hostChildExtensions ? { extensionFactories: hostChildExtensions as never[] } : {}),
     noSkills,
     noPromptTemplates: true,
     noThemes: true,
